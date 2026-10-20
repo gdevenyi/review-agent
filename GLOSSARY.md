@@ -14,7 +14,7 @@ _Avoid_: comment, feedback, report
 
 **Draft Review**:
 A Review left pending on GitHub, visible only to the Reviewer until the Reviewer edits and submits it. This is the default outcome.
-_Avoid_: preview, draft file
+_Avoid_: preview
 
 **Published Review**:
 A Review the tool submits directly, visible to everyone. Only on explicit request, and never as an approval.
