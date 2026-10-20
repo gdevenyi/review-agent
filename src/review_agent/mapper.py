@@ -210,7 +210,7 @@ class ReviewMapper:
         globs = DEFAULT_SKIP_GLOBS + tuple(self.skip_globs)
         for f in _by_severity(review["findings"]):
             if f["path"] and _skipped(f["path"], globs):
-                log.info("Skip glob: a Finding on %s is dropped", f["path"])
+                log.info("Skip glob: one Finding dropped")
                 continue
             if not f["path"] or f["line"] is None or not _anchored(f, hunks):
                 general.append(f)
