@@ -63,6 +63,10 @@ class PullRef:
     def full_name(self) -> str:
         return f"{self.owner}/{self.repo}"
 
+    @property
+    def url(self) -> str:
+        return f"https://github.com/{self.owner}/{self.repo}/pull/{self.number}"
+
     def __str__(self) -> str:
         return f"{self.owner}/{self.repo}#{self.number}"
 

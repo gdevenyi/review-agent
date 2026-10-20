@@ -25,9 +25,7 @@ def actions(world, monkeypatch, tmp_path, *args):
 
     def fake_run_review(url, opts):
         chosen["options"] = opts
-        return review_agent.run_review(
-            url, world.options(dry_run=opts.dry_run, publish=opts.publish)
-        )
+        return review_agent.run_review(url, world.options(mode=opts.mode))
 
     monkeypatch.setattr(cli_mod, "run_review", fake_run_review)
     code = cli_mod.main([*args, "--actions"])

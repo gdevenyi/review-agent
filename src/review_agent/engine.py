@@ -130,6 +130,7 @@ class ClaudeCodeEngine:
         claude_real = Path(claude).resolve()
 
         with tempfile.TemporaryDirectory(prefix="review-agent-home-") as home:
+            Path(home, "tmp").mkdir()  # TMPDIR of the engine
             if bwrap is not None:
                 err = _probe_sandbox(bwrap)
             else:
@@ -183,7 +184,6 @@ class ClaudeCodeEngine:
     def _run_sandboxed(
         self, bwrap: str, claude: Path, prompt: str, clone: Path, home: str
     ) -> str:
-        Path(home, "tmp").mkdir()
         env = self._env(SANDBOX_HOME)
         secret_env = {"ANTHROPIC_API_KEY": env.pop("ANTHROPIC_API_KEY")}
         args = [bwrap, *_namespace_args(), *_system_mounts()]
@@ -209,7 +209,6 @@ class ClaudeCodeEngine:
     def _run_unsandboxed(
         self, claude: Path, prompt: str, clone: Path, home: str
     ) -> str:
-        Path(home, "tmp").mkdir()
         args = [str(claude), *self._claude_args()]
         return self._run(args, prompt, cwd=clone, env=self._env(home), pass_fds=())
 

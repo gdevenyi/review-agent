@@ -34,9 +34,8 @@ class Posted:
 
 
 class Publisher:
-    def __init__(self, pr: PullRef, pr_url: str):
+    def __init__(self, pr: PullRef):
         self.pr = pr
-        self.pr_url = pr_url
 
     def post(self, gh: GitHubClient, review: MappedReview, *, publish: bool) -> Posted:
         data = gh.create_review(self.pr, review.to_payload(), publish=publish)
@@ -55,7 +54,7 @@ class Publisher:
         parts = [
             f"# Review of {self.pr}",
             "",
-            f"PR: {self.pr_url}  ",
+            f"PR: {self.pr.url}  ",
             f"Commit: `{review.commit_id}`",
             "",
             "## Review body",

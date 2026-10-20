@@ -41,7 +41,7 @@ from typing import Any
 
 import httpx
 
-from review_agent import Options, RunResult, run_review
+from review_agent import Options, RunMode, RunResult, run_review
 
 OWNER = "octo"
 REPO = "widgets"
@@ -307,7 +307,7 @@ class World:
     def options(self, **overrides) -> Options:
         kw = dict(
             config_path=self.config_path,
-            dry_run=True,
+            mode=RunMode.DRY_RUN,
             out_dir=self.out_dir,
             log_dir=self.log_dir,
             tmp_root=self.tmp_root,

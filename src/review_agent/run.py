@@ -6,9 +6,9 @@ or posted, and the result carries the error and the run log path.
 1. Load the config. Read the GitHub token for the PR owner (refuse the Actions
    GITHUB_TOKEN) and the engine key from the env.
 2. Preflight: `GET /user` must return the `[auth] login`; warn when the token
-   expires in 14 days or less. 401, 403 SSO and 404 stop the run. Without
-   `dry_run`: stop if the Reviewer already has a pending review on the PR
-   (a dry run posts nothing, so it skips this check).
+   expires in 14 days or less. 401, 403 SSO and 404 stop the run. Stop if
+   the Reviewer already has a pending review on the PR (a dry run posts
+   nothing, so it skips this check).
 3. Read the PR metadata, the diff and the Repo Guidance (base commit).
 4. Clone the PR head (Workspace).
 5. Build the prompt; run the engine (one retry on invalid Review JSON).
@@ -26,6 +26,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 
 import httpx
@@ -48,7 +49,7 @@ from review_agent.mapper import (
 )
 from review_agent.output_filter import filter_review
 from review_agent.prompt import PromptBuilder
-from review_agent.publisher import Posted, Publisher
+from review_agent.publisher import Publisher
 from review_agent.tokens import expiry_warnings, select_token
 from review_agent.workspace import Workspace
 
@@ -73,13 +74,20 @@ def default_engine_factory(sandbox: SandboxMode) -> EngineFactory:
     return make
 
 
+class RunMode(Enum):
+    """What a run does with the Review."""
+
+    DRAFT = "draft"  # post a Draft Review (the default)
+    PUBLISH = "publish"  # post a Published Review (COMMENT)
+    DRY_RUN = "dry-run"  # write files; post nothing
+
+
 @dataclass
 class Options:
     """How to run one Review. Every field has a default for the CLI."""
 
     config_path: Path | str | None = None
-    dry_run: bool = False
-    publish: bool = False
+    mode: RunMode = RunMode.DRAFT
     out_dir: Path | None = None  # dry-run files; default: the current dir
     log_dir: Path | None = None  # default: $XDG_STATE_HOME/review-agent/runs
     tmp_root: Path | None = None  # parent dir of the clone; default: tempfile's
@@ -101,15 +109,40 @@ class RunResult:
     review: MappedReview | None = None
     # Warnings for the Reviewer, for example a token that expires soon.
     warnings: list[str] = field(default_factory=list)
-    posted: bool = False  # a Review is on GitHub (Draft or Published)
-    published: bool = False  # it was submitted as COMMENT
+    mode: RunMode = RunMode.DRAFT
+    # The engine failed. Its error text can quote model output, so the Action
+    # shows a generic message (actions.py).
+    engine_failed: bool = False
+
+    @property
+    def posted(self) -> bool:
+        """A Review is on GitHub (Draft or Published)."""
+        return self.ok and self.mode is not RunMode.DRY_RUN
+
+    @property
+    def published(self) -> bool:
+        """The Review was submitted as COMMENT."""
+        return self.ok and self.mode is RunMode.PUBLISH
+
+    @property
+    def status(self) -> str:
+        """One line for the Reviewer: what the run did. No Review content."""
+        if not self.ok:
+            return "The run failed. Nothing was posted."
+        if self.published:
+            return f"A Published Review (COMMENT) is on {self.pr_url}."
+        if self.posted:
+            return (
+                f"A Draft Review is waiting for you on {self.pr_url}. Open the "
+                "PR, check and edit the Review, then submit it."
+            )
+        return f"Dry run for {self.pr_url}: nothing was posted."
 
 
 @dataclass
 class _Outcome:
     review: MappedReview
     files: list[Path] = field(default_factory=list)
-    posted: Posted | None = None
 
 
 def run_review(pr_url: str, options: Options | None = None) -> RunResult:
@@ -122,7 +155,14 @@ def run_review(pr_url: str, options: Options | None = None) -> RunResult:
         outcome = _run(pr_url, options, env, warnings)
     except (ReviewAgentError, EngineError) as e:
         log.error("Run failed: %s", e)
-        return RunResult(False, pr_url, log_path, error=str(e), warnings=warnings)
+        return RunResult(
+            False,
+            pr_url,
+            log_path,
+            error=str(e),
+            warnings=warnings,
+            mode=options.mode,
+        )
     except Exception as e:  # report every failure the same way
         log.exception("Run failed with an unexpected error")
         return RunResult(
@@ -131,6 +171,7 @@ def run_review(pr_url: str, options: Options | None = None) -> RunResult:
             log_path,
             error=f"Unexpected error: {type(e).__name__}: {e}",
             warnings=warnings,
+            mode=options.mode,
         )
     finally:
         _stop_log(handler)
@@ -141,16 +182,13 @@ def run_review(pr_url: str, options: Options | None = None) -> RunResult:
         files=outcome.files,
         review=outcome.review,
         warnings=warnings,
-        posted=outcome.posted is not None,
-        published=bool(outcome.posted and outcome.posted.published),
+        mode=options.mode,
     )
 
 
 def _run(
     pr_url: str, options: Options, env: Mapping[str, str], warnings: list[str]
 ) -> _Outcome:
-    if options.dry_run and options.publish:
-        raise ReviewAgentError("Use --dry-run or --publish, not both.")
     pr = parse_pr_url(pr_url)
     config = load_config(options.config_path, env)
     log.info("Config: %s", config.path)
@@ -166,8 +204,8 @@ def _run(
     ) as gh:
         _preflight(gh, config)
         warnings.extend(expiry_warnings(gh.token_expiration, token_var))
-        if not options.dry_run:
-            _check_no_pending_review(gh, pr, pr_url, config.auth.login)
+        if options.mode is not RunMode.DRY_RUN:
+            _check_no_pending_review(gh, pr, config.auth.login)
         meta = gh.get_pull(pr)
         diff = gh.get_diff(pr)
         guidance = fetch_repo_guidance(gh, pr, meta["base"]["sha"])
@@ -201,20 +239,20 @@ def _run(
             skip_globs=config.review.skip_globs,
         ).map(review)
         mapped = filter_review(mapped, target=pr, secrets=(token, engine_key))
-        publisher = Publisher(pr, pr_url)
-        if options.dry_run:
+        publisher = Publisher(pr)
+        if options.mode is RunMode.DRY_RUN:
             files = publisher.dry_run(mapped, options.out_dir or Path.cwd())
             for f in files:
                 log.info("Wrote %s", f)
             return _Outcome(mapped, files=files)
-        posted = publisher.post(gh, mapped, publish=options.publish)
+        posted = publisher.post(gh, mapped, publish=options.mode is RunMode.PUBLISH)
         log.info(
             "Posted review %s (%s) with %d inline comments",
             posted.review_id,
             posted.state,
             len(mapped.comments),
         )
-        return _Outcome(mapped, posted=posted)
+        return _Outcome(mapped)
 
 
 def _preflight(gh: GitHubClient, config: Config) -> None:
@@ -232,15 +270,13 @@ class PendingReviewExists(ReviewAgentError):
     """The Reviewer already has a pending review on the Target PR."""
 
 
-def _check_no_pending_review(
-    gh: GitHubClient, pr: PullRef, pr_url: str, login: str
-) -> None:
+def _check_no_pending_review(gh: GitHubClient, pr: PullRef, login: str) -> None:
     """GitHub allows one pending review per user and PR. Stop before the
     engine runs, with a message the Reviewer can act on."""
     for r in gh.list_reviews(pr):
         if r.get("state") == "PENDING" and (r.get("user") or {}).get("login") == login:
             raise PendingReviewExists(
-                f"{login} already has a pending review on {pr_url}. Open the PR, "
+                f"{login} already has a pending review on {pr.url}. Open the PR, "
                 "then submit or delete that pending review, and run the review "
                 "again. The engine did not run."
             )
@@ -250,8 +286,9 @@ def _check_no_pending_review(
 def _review_with_retry(engine: Engine, prompt: str, clone: Path) -> dict:
     attempts = 2  # one retry on invalid Review JSON
     for attempt in range(1, attempts + 1):
-        log.info("Engine run %d of %d (%s, %s)", attempt, attempts, engine.name,
-                 engine.model)  # fmt: skip
+        log.info(
+            "Engine run %d of %d (%s, %s)", attempt, attempts, engine.name, engine.model
+        )
         start = time.monotonic()
         raw = engine.review(prompt, clone)
         log.info("Engine run %d took %.0f s", attempt, time.monotonic() - start)
