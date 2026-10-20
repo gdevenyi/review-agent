@@ -112,7 +112,11 @@ def run_review(pr_url: str, options: Options | None = None) -> RunResult:
     except Exception as e:  # report every failure the same way
         log.exception("Run failed with an unexpected error")
         return RunResult(
-            False, pr_url, log_path, error=f"Unexpected error: {type(e).__name__}: {e}"
+            False,
+            pr_url,
+            log_path,
+            error=f"Unexpected error: {type(e).__name__}: {e}",
+            warnings=warnings,
         )
     finally:
         _stop_log(handler)
