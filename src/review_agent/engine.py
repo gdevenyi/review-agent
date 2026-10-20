@@ -150,8 +150,10 @@ class ClaudeCodeEngine:
 
     def _claude_args(self) -> list[str]:
         return [
+            # No --bare: in claude 2.1.30x it removes the Grep and Glob tools.
+            # --restricted ignores the clone's settings files (so its hooks),
+            # and the env below turns off CLAUDE.md and memory loading.
             "-p",
-            "--bare",
             "--restricted",
             "--tools",
             "Read,Grep,Glob",
@@ -174,6 +176,8 @@ class ClaudeCodeEngine:
             "PATH": SANDBOX_PATH,
             "ANTHROPIC_BASE_URL": self.base_url,
             "ANTHROPIC_API_KEY": self._api_key,
+            "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
         }
 
     def _run_sandboxed(

@@ -124,7 +124,15 @@ def world(tmp_path, monkeypatch):
     return clone
 
 
-EXPECTED_ENV = {"HOME", "PATH", "TMPDIR", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"}
+EXPECTED_ENV = {
+    "HOME",
+    "PATH",
+    "TMPDIR",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_DISABLE_CLAUDE_MDS",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+}
 
 
 @needs_bwrap
@@ -145,6 +153,9 @@ def test_sandboxed_engine_sees_only_the_clone_and_engine_env(world):
     assert seen["home_writable"] is True
     assert seen["tmpdir_writable"] is True
     assert seen["prompt"] == "Review this PR."
+    # Second guard (after --restricted) against CLAUDE.md from the clone.
+    assert seen["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1"
+    assert seen["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
 
 
 @needs_bwrap
@@ -153,12 +164,13 @@ def test_engine_runs_claude_headless_with_read_only_tools(world):
 
     for flag in (
         "-p",
-        "--bare",
         "--restricted",
         "--strict-mcp-config",
         "--disable-slash-commands",
     ):
         assert flag in argv
+    # --bare removes the Grep and Glob tools (claude 2.1.30x).
+    assert "--bare" not in argv
 
     def value(flag):
         return argv[argv.index(flag) + 1]
