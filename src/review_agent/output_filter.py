@@ -124,7 +124,9 @@ def _sanitize(text: str, target: PullRef) -> str:
 # --- code and prose ----------------------------------------------------------
 
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)", re.S)
+# A code span ends at a blank line, as on GitHub.
+# A backslash before the opening backtick escapes it (no span).
+_CODE_SPAN = re.compile(r"(?<![`\\])(`+)(?!`)(?:(?!\n[ \t]*\n).)+?(?<!`)\1(?!`)", re.S)
 
 
 def _segments(text: str) -> tuple[list[tuple[bool, str]], int | None]:
@@ -172,7 +174,7 @@ def _split_spans(text: str) -> list[tuple[bool, str]]:
 
 # --- prose rules -------------------------------------------------------------
 
-_MENTION = r"(?<![\w`@/])@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9_-]*)?"
+_MENTION = r"(?<![\w@/])@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9_-]*)?"
 
 _BARE_URL = (
     r"(?<![\w/@.])(?i:https?://|www\.)"
@@ -214,7 +216,17 @@ def _plain_url(url: str, target: PullRef) -> str:
     return url if _is_target(url, target) else f"`{url}`"
 
 
+# An `@` that GitHub renders from an entity or an escape still pings.
+_AT_FORMS = re.compile(r"&#0*64;|&#[xX]0*40;|&commat;|\\+@")
+# A backtick in prose has no partner (code spans are split off before): escape
+# it, so that it cannot pair with the backticks that this filter adds.
+_STRAY_BACKTICK = re.compile(r"(?<!\\)((?:\\\\)*)`")
+
+
 def _clean_prose(text: str, target: PullRef) -> str:
+    text = _AT_FORMS.sub("@", text)
+    text = _STRAY_BACKTICK.sub(r"\1\\`", text)
+
     def sub(m: re.Match[str]) -> str:
         if m.group("comment") or m.group("image") or m.group("html"):
             return ""

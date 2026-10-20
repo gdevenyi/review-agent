@@ -79,6 +79,26 @@ def test_mentions_do_not_ping(world):
     assert "`@someone`" in world.output_markdown()
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A stray backtick must not pair with the backticks the filter adds.
+        ("a ` b @octocat", "a \\` b `@octocat`"),
+        # A code span cannot cross a blank line on GitHub.
+        ("`x\n\n@octocat y`", "\\`x\n\n`@octocat` y\\`"),
+        ("&#64;octocat and &#x40;hubot", "`@octocat` and `@hubot`"),
+        ("&commat;octocat", "`@octocat`"),
+        ("\\@octocat", "`@octocat`"),
+        # An escaped backtick does not open a code span.
+        ("\\`@octocat`", "\\``@octocat`\\`"),
+    ],
+)
+def test_mention_tricks_do_not_ping(world, text, expected):
+    comment, _ = _run_with_comment(world, text)
+
+    assert comment == expected
+
+
 def test_mentions_in_code_stay_as_they_are(world):
     comment, _ = _run_with_comment(world, "Use `@decorator` or\n\n```\n@property\n```")
 
