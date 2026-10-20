@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 API_URL = "https://api.github.com"
 JSON_MEDIA_TYPE = "application/vnd.github+json"
 DIFF_MEDIA_TYPE = "application/vnd.github.diff"
+RAW_MEDIA_TYPE = "application/vnd.github.raw+json"
 API_VERSION = "2022-11-28"
 
 _PR_URL = re.compile(
@@ -88,10 +89,16 @@ class GitHubClient:
     def close(self) -> None:
         self._http.close()
 
-    def _get(self, path: str, *, accept: str | None = None) -> httpx.Response:
+    def _get(
+        self,
+        path: str,
+        *,
+        accept: str | None = None,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
         headers = {"Accept": accept} if accept else None
         try:
-            resp = self._http.get(path, headers=headers)
+            resp = self._http.get(path, headers=headers, params=params)
         except httpx.HTTPError as e:
             raise GitHubError(f"GET {path} failed: {e}") from None
         log.info("GET %s -> %s", path, resp.status_code)
@@ -110,6 +117,20 @@ class GitHubClient:
         if resp.status_code != 200:
             raise GitHubError(_failure(f"Reading {pr}", resp))
         return resp.json()
+
+    def get_contents(self, pr: PullRef, path: str, ref: str) -> str | None:
+        """The text of `path` at commit `ref` in the PR's repo, or None if the
+        file is not there (404). Other failures raise GitHubError."""
+        resp = self._get(
+            f"/repos/{pr.owner}/{pr.repo}/contents/{path}",
+            accept=RAW_MEDIA_TYPE,
+            params={"ref": ref},
+        )
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise GitHubError(_failure(f"Reading {path} at {ref[:12]}", resp))
+        return resp.text
 
     def get_diff(self, pr: PullRef) -> str:
         path = f"/repos/{pr.owner}/{pr.repo}/pulls/{pr.number}"
