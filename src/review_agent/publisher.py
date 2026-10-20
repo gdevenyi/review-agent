@@ -1,4 +1,12 @@
-"""Publisher: the last step. Dry run only for now; posting comes in #19.
+"""Publisher: the last step. It posts the Review, or writes it to files.
+
+- Default: one `POST .../reviews` with no `event`. GitHub keeps it as a
+  pending review: a Draft Review that only the Reviewer can see.
+- Publish: the same single POST with `event: COMMENT` (a Published Review).
+  It is one request, not create-then-submit, so a failure never leaves a
+  Draft Review behind. No other event can be sent: the tool never approves
+  and never requests changes (see `GitHubClient.create_review`).
+- The payload is always `MappedReview.to_payload()` of the filtered Review.
 
 A dry run writes two files and posts nothing:
 
@@ -11,16 +19,28 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
-from review_agent.github import PullRef
+from review_agent.github import GitHubClient, PullRef
 from review_agent.mapper import MappedReview
+
+
+@dataclass(frozen=True)
+class Posted:
+    review_id: int | None
+    state: str | None  # PENDING (Draft Review) or COMMENTED (Published Review)
+    published: bool
 
 
 class Publisher:
     def __init__(self, pr: PullRef, pr_url: str):
         self.pr = pr
         self.pr_url = pr_url
+
+    def post(self, gh: GitHubClient, review: MappedReview, *, publish: bool) -> Posted:
+        data = gh.create_review(self.pr, review.to_payload(), publish=publish)
+        return Posted(data.get("id"), data.get("state"), publish)
 
     def dry_run(self, review: MappedReview, out_dir: Path) -> list[Path]:
         out_dir.mkdir(parents=True, exist_ok=True)
