@@ -37,5 +37,5 @@ jobs:
       ref: master
       config: review-agent/config.toml
     secrets:
-      github_token: ${{ secrets.GH_PR_AGENT }}
+      reviewer_token: ${{ secrets.GH_PR_AGENT }}
       engine_key: ${{ secrets.ZAI_API_KEY }}

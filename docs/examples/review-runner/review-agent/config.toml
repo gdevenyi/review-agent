@@ -1,5 +1,5 @@
 # Example config for the runner repo. The reusable workflow puts the
-# `github_token` secret in REVIEW_AGENT_GITHUB_TOKEN and the `engine_key`
+# `reviewer_token` secret in REVIEW_AGENT_GITHUB_TOKEN and the `engine_key`
 # secret in REVIEW_AGENT_ENGINE_KEY, so keep the default variable names here.
 
 [auth]

@@ -37,7 +37,7 @@ on:
         type: string
         default: "2.1.304"
     secrets:
-      github_token:
+      reviewer_token:
         description: "The Reviewer's GitHub personal access token (not GITHUB_TOKEN)"
         required: true
       engine_key:
@@ -96,7 +96,7 @@ jobs:
           PR_URL: ${{ inputs.pr_url }}
           PUBLISH: ${{ inputs.publish }}
           REVIEW_AGENT_CONFIG: ${{ github.workspace }}/${{ inputs.config }}
-          REVIEW_AGENT_GITHUB_TOKEN: ${{ secrets.github_token }}
+          REVIEW_AGENT_GITHUB_TOKEN: ${{ secrets.reviewer_token }}
           REVIEW_AGENT_ENGINE_KEY: ${{ secrets.engine_key }}
           DISABLE_AUTOUPDATER: "1"
         run: |
