@@ -12,7 +12,7 @@ No network. The steps of `ReviewMapper.map`:
    becomes a GitHub suggestion block (RIGHT side only).
 6. End the body with the AI Disclosure.
 
-The output filter comes in #16.
+run.py then applies the output filter (output_filter.py, #16).
 """
 
 from __future__ import annotations

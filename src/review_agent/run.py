@@ -10,7 +10,8 @@ or posted, and the result carries the error and the run log path.
 3. Read the PR metadata, the diff and the Repo Guidance (base commit).
 4. Clone the PR head (Workspace).
 5. Build the prompt; run the engine (one retry on invalid Review JSON).
-6. Map the Review (ReviewMapper).
+6. Map the Review (ReviewMapper), then filter it (output_filter; a secret
+   pattern stops the run).
 7. Publish (dry run: write files).
 """
 
@@ -42,6 +43,7 @@ from review_agent.mapper import (
     ReviewMapper,
     parse_review,
 )
+from review_agent.output_filter import filter_review
 from review_agent.prompt import PromptBuilder
 from review_agent.publisher import Publisher
 from review_agent.tokens import expiry_warnings, select_token
@@ -177,6 +179,7 @@ def _run(
         finding_limit=config.review.finding_limit,
         skip_globs=config.review.skip_globs,
     ).map(review)
+    mapped = filter_review(mapped, target=pr, secrets=(token, engine_key))
     files = Publisher(pr, pr_url).dry_run(mapped, options.out_dir or Path.cwd())
     for f in files:
         log.info("Wrote %s", f)
