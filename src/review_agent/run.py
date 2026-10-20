@@ -39,6 +39,7 @@ from review_agent.mapper import (
     ReviewMapper,
     parse_review,
 )
+from review_agent.output_filter import filter_review
 from review_agent.prompt import PromptBuilder
 from review_agent.publisher import Publisher
 from review_agent.workspace import Workspace
@@ -151,6 +152,7 @@ def _run(
         engine_name=engine.name,
         model=engine.model,
     ).map(review)
+    mapped = filter_review(mapped, target=pr, secrets=(token, engine_key))
     files = Publisher(pr, pr_url).dry_run(mapped, options.out_dir or Path.cwd())
     for f in files:
         log.info("Wrote %s", f)
