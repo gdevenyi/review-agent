@@ -37,7 +37,13 @@ from review_agent.config import (
     load_config,
     read_secret,
 )
-from review_agent.engine import ClaudeCodeEngine, Engine, EngineError, SandboxMode
+from review_agent.engine import (
+    DEFAULT_TIMEOUT,
+    ClaudeCodeEngine,
+    Engine,
+    EngineError,
+    SandboxMode,
+)
 from review_agent.errors import ReviewAgentError
 from review_agent.github import API_URL, GitHubClient, PullRef, parse_pr_url
 from review_agent.guidance import fetch_repo_guidance, load_instructions
@@ -54,6 +60,11 @@ from review_agent.tokens import expiry_warnings, select_token
 from review_agent.workspace import Workspace
 
 log = logging.getLogger("review_agent")
+
+# Engine time for one run, all attempts together (story 12).
+ENGINE_BUDGET = DEFAULT_TIMEOUT
+# Do not start a retry with less time than this.
+MIN_RETRY = 2 * 60
 
 EngineFactory = Callable[[EngineSettings, str], Engine]
 
@@ -97,6 +108,7 @@ class Options:
     engine_factory: EngineFactory | None = None
     http_transport: httpx.BaseTransport | None = None
     api_url: str = API_URL
+    clock: Callable[[], float] = time.monotonic
 
 
 @dataclass
@@ -154,7 +166,10 @@ def run_review(pr_url: str, options: Options | None = None) -> RunResult:
     try:
         outcome = _run(pr_url, options, env, warnings)
     except (ReviewAgentError, EngineError) as e:
-        log.error("Run failed: %s", e)
+        engine_failed = isinstance(e, EngineError)
+        # `engine_detail`: the text can quote model output; the Action keeps
+        # this record out of its job log (cli.py, actions.py).
+        log.error("Run failed: %s", e, extra={"engine_detail": engine_failed})
         return RunResult(
             False,
             pr_url,
@@ -162,6 +177,7 @@ def run_review(pr_url: str, options: Options | None = None) -> RunResult:
             error=str(e),
             warnings=warnings,
             mode=options.mode,
+            engine_failed=engine_failed,
         )
     except Exception as e:  # report every failure the same way
         log.exception("Run failed with an unexpected error")
@@ -220,6 +236,7 @@ def _run(
             repo_guidance=guidance,
             instructions=load_instructions(config.dir, pr),
             language=config.review.language,
+            finding_limit=config.review.finding_limit,
         ).build()
 
         with Workspace(
@@ -228,7 +245,7 @@ def _run(
             token=token,
             tmp_root=options.tmp_root,
         ) as ws:
-            review = _review_with_retry(engine, prompt, ws.path)
+            review = _review_with_retry(engine, prompt, ws.path, options.clock)
 
         mapped = ReviewMapper(
             commit_id=meta["head"]["sha"],
@@ -283,24 +300,47 @@ def _check_no_pending_review(gh: GitHubClient, pr: PullRef, login: str) -> None:
     log.info("No pending review by %s on %s", login, pr)
 
 
-def _review_with_retry(engine: Engine, prompt: str, clone: Path) -> dict:
-    attempts = 2  # one retry on invalid Review JSON
+def _review_with_retry(
+    engine: Engine, prompt: str, clone: Path, clock: Callable[[], float]
+) -> dict:
+    """Run the engine; one retry on invalid Review JSON. All attempts share
+    one budget of ENGINE_BUDGET seconds (story 12): the retry gets only the
+    time that is left, and there is no retry if less than MIN_RETRY is left."""
+    attempts = 2
+    deadline = clock() + ENGINE_BUDGET
     for attempt in range(1, attempts + 1):
+        left = deadline - clock()
         log.info(
-            "Engine run %d of %d (%s, %s)", attempt, attempts, engine.name, engine.model
+            "Engine run %d of %d (%s, %s), %.0f s left",
+            attempt,
+            attempts,
+            engine.name,
+            engine.model,
+            left,
         )
-        start = time.monotonic()
-        raw = engine.review(prompt, clone)
-        log.info("Engine run %d took %.0f s", attempt, time.monotonic() - start)
+        start = clock()
+        raw = engine.review(prompt, clone, timeout=left)
+        log.info("Engine run %d took %.0f s", attempt, clock() - start)
         try:
             return parse_review(raw)
         except InvalidReviewJSON as e:
-            log.warning("Engine run %d: %s", attempt, e)
-            log.debug("Engine output (first 4000 chars): %s", raw[:4000])
+            # Never the output itself: it can quote private code or secrets.
+            log.warning(
+                "Engine run %d: %s (the output has %d characters)",
+                attempt,
+                e,
+                len(raw),
+            )
             if attempt == attempts:
                 raise InvalidReviewJSON(
                     f"The engine returned invalid Review JSON {attempts} times. "
                     f"Last error: {e}"
+                ) from None
+            if deadline - clock() < MIN_RETRY:
+                raise InvalidReviewJSON(
+                    "The engine returned invalid Review JSON, and too little of "
+                    f"the {ENGINE_BUDGET / 60:g} minutes of engine time is left "
+                    f"for a retry. Error: {e}"
                 ) from None
     raise AssertionError("unreachable")
 
@@ -327,7 +367,9 @@ def _start_log(
     path = log_dir / f"{stamp}-{slug}.log"
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(path, encoding="utf-8")
+        # Only the user can read the run log: it can name private repos.
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        handler = logging.FileHandler(path, mode="a", encoding="utf-8")
     except OSError:
         return None, None
     handler.setLevel(logging.DEBUG)

@@ -82,6 +82,20 @@ def test_run_log_is_written(world):
     assert result.log_path is not None and result.log_path.is_file()
     assert result.log_path.parent == world.log_dir
     assert GITHUB_TOKEN not in result.log_path.read_text()
+    # The run log can name private repos: only the user can read it.
+    assert result.log_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_run_log_has_no_raw_engine_output(world):
+    world.engine.respond("SECRET-RAW not JSON", '{"summary": "SECRET-RAW-2"}')
+
+    result = world.run()
+
+    assert not result.ok
+    text = result.log_path.read_text()
+    assert "SECRET-RAW" not in text
+    # It logs the size of the output and the kind of schema error.
+    assert "19 characters" in text
 
 
 def assert_failed_with_nothing_written(world, result):
@@ -251,3 +265,27 @@ def test_missing_config_file_gives_a_clear_error(world):
     assert not result.ok
     assert "nope.toml" in result.error
     assert world.engine.calls == []
+
+
+# --- the 20-minute engine budget (story 12): per run, not per attempt -------
+
+
+def test_the_retry_gets_only_the_rest_of_the_engine_budget(world):
+    world.engine.respond("not JSON", took=5 * 60)
+    world.engine.respond(review_json(summary="Second try."))
+
+    result = world.run()
+
+    assert result.ok, result.error
+    assert [c.timeout for c in world.engine.calls] == [20 * 60, 15 * 60]
+
+
+def test_no_retry_when_too_little_of_the_engine_budget_is_left(world):
+    world.engine.respond("not JSON", took=19 * 60 + 30)
+    world.engine.respond(review_json())
+
+    result = world.run()
+
+    assert_failed_with_nothing_written(world, result)
+    assert len(world.engine.calls) == 1
+    assert "invalid Review JSON" in result.error and "20 minutes" in result.error

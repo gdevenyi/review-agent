@@ -14,7 +14,10 @@ and the body of each inline comment.
    - images and raw HTML are removed;
    - links stay only when they point to the Target repo; other links and
      bare URLs become plain text that GitHub does not make into a link;
-   - `@mentions` are put in code spans, so they do not ping.
+   - `@mentions` are put in code spans, so they do not ping;
+   - references to another repo (`owner/repo#N`, `owner/repo@sha`) are put
+     in code spans, so GitHub does not link them or add a cross-reference
+     event to the other repo. References to the Target repo stay.
 """
 
 from __future__ import annotations
@@ -176,6 +179,12 @@ def _split_spans(text: str) -> list[tuple[bool, str]]:
 
 _MENTION = r"(?<![\w@/])@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9_-]*)?"
 
+# `owner/repo#N` and `owner/repo@sha`, which GitHub links across repos.
+_XREF = (
+    r"(?<![\w/.@-])(?P<xowner>[A-Za-z0-9][A-Za-z0-9-]*)/(?P<xrepo>[\w.-]+)"
+    r"(?:#\d+|@[0-9a-fA-F]{7,40})\b"
+)
+
 _BARE_URL = (
     r"(?<![\w/@.])(?i:https?://|www\.)"
     r"[^\s<>()\[\]`'\"]*[^\s<>()\[\]`'\".,;:!?*_~]"
@@ -192,6 +201,7 @@ _PROSE = re.compile(
             r"(?P<refdef>^ {0,3}\[[^\]]+\]:[ \t]*<?(?P<rurl>[^\s>]+)>?[^\n]*\n?)",
             r"(?P<html></?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>)",
             r"(?P<url>" + _BARE_URL + r")",
+            r"(?P<xref>" + _XREF + r")",
             r"(?P<mention>" + _MENTION + r")",
         ]
     ),
@@ -241,6 +251,12 @@ def _clean_prose(text: str, target: PullRef) -> str:
             return m.group(0) if _is_target(m.group("rurl"), target) else ""
         if m.group("url"):
             return _plain_url(m.group("url"), target)
+        if m.group("xref"):
+            same = (m.group("xowner").lower(), m.group("xrepo").lower()) == (
+                target.owner.lower(),
+                target.repo.lower(),
+            )
+            return m.group(0) if same else f"`{m.group(0)}`"
         if m.group("mention"):
             return f"`{m.group('mention')}`"
         return m.group(0)

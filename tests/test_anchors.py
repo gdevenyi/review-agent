@@ -233,6 +233,26 @@ def test_suggestion_becomes_a_github_suggestion_block(world):
     )
 
 
+def test_suggestion_of_5_lines_is_a_suggestion_block_6_lines_is_not(world):
+    five = "".join(f"x{i} = {i}\n" for i in range(5))
+    six = "".join(f"y{i} = {i}\n" for i in range(6))
+    world.engine.respond(
+        review_json(
+            findings=[
+                finding("Five.", start_line=3, line=6, suggestion=five),
+                finding("Six.", start_line=3, line=6, suggestion=six),
+            ]
+        )
+    )
+
+    assert world.run().ok
+    five_body, six_body = (c["body"] for c in world.output_json()["comments"])
+    assert "```suggestion\nx0 = 0\n" in five_body
+    # Too large to apply with one click: a plain code block.
+    assert "```suggestion" not in six_body
+    assert "```\ny0 = 0\n" in six_body and "y5 = 5\n```" in six_body
+
+
 def test_suggestion_with_a_code_fence_gets_a_longer_fence(world):
     world.engine.respond(
         review_json(findings=[finding("Doc.", line=6, suggestion='x = """\n```\n"""')])
