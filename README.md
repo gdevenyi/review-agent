@@ -1,1 +1,129 @@
 # review-agent
+
+`review <pr-url>` drafts a Review of a GitHub pull request with an AI engine
+and leaves it as a **Draft Review**: a pending review under your own name that
+only you can see. You check it, edit it and submit it. With `--publish`, the
+tool submits the Review at once, always as a COMMENT. The tool never approves
+and never requests changes.
+
+The engine is Claude Code on Z.AI `glm-5.3-flash`. It runs in a bubblewrap
+sandbox and can only read the clone of the PR (ADR 0001, ADR 0002).
+
+review-agent supports only Linux.
+
+## Install the CLI
+
+You need:
+
+- Linux, with `bwrap` (bubblewrap) on PATH. For example:
+  `sudo apt-get install bubblewrap`.
+- `claude` (Claude Code) on PATH.
+- `uv`.
+
+1. Install the tool:
+
+   ```sh
+   uv tool install git+https://github.com/gdevenyi/review-agent
+   ```
+
+2. Make the config file `~/.config/review-agent/config.toml`:
+
+   ```toml
+   [auth]
+   login = "<your GitHub login>"
+   # Optional: other names for the secret variables.
+   # github_token_var = "GH_PR_AGENT"
+   # engine_key_var = "ZAI_API_KEY"
+   # Optional: one token for each organization.
+   # [auth.tokens]
+   # SomeOrg = "GH_PR_AGENT_SOMEORG"
+
+   [engine]
+   base_url = "https://api.z.ai/api/anthropic"
+   model = "glm-5.3-flash"
+
+   [review]
+   finding_limit = 10
+   ```
+
+   Optional: write your priorities and tone in
+   `~/.config/review-agent/instructions.md`, and notes for one repo in
+   `~/.config/review-agent/repos/<owner>/<repo>.md`.
+
+3. Put your secrets in environment variables. The default names are
+   `REVIEW_AGENT_GITHUB_TOKEN` (a classic personal access token with the
+   `public_repo` scope) and `REVIEW_AGENT_ENGINE_KEY` (the Z.AI API key). Keep
+   them in a file with mode 600 and load it in your shell. The tool does not
+   use the `gh` CLI token.
+
+4. Run a Review:
+
+   ```sh
+   review https://github.com/<owner>/<repo>/pull/<number>            # Draft Review
+   review https://github.com/<owner>/<repo>/pull/<number> --dry-run  # files only
+   review https://github.com/<owner>/<repo>/pull/<number> --publish  # COMMENT
+   ```
+
+To rotate your keys, see [docs/rotate-keys.md](docs/rotate-keys.md).
+
+## Use the Action
+
+The Action runs the same code from a **private** runner repo that you own.
+Use a private repo, because the run logs of a public repo are public. You
+start a Review from the GitHub UI (Actions tab, "Run workflow") or with
+`gh workflow run`.
+
+1. Make a private repo, for example `<you>/review-runner`:
+
+   ```sh
+   gh repo create <you>/review-runner --private --add-readme
+   ```
+
+2. Add your config file to the runner repo as `review-agent/config.toml`.
+   Use [docs/examples/review-runner/review-agent/config.toml](docs/examples/review-runner/review-agent/config.toml)
+   as a start. Keep the default variable names: the workflow puts the secrets
+   in `REVIEW_AGENT_GITHUB_TOKEN` and `REVIEW_AGENT_ENGINE_KEY`. Optional: add
+   `review-agent/instructions.md` and `review-agent/repos/<owner>/<repo>.md`.
+
+3. Add two repo secrets to the runner repo. `gh` asks for each value; do not
+   put a value on the command line:
+
+   ```sh
+   gh secret set GH_PR_AGENT --repo <you>/review-runner   # your GitHub token
+   gh secret set ZAI_API_KEY --repo <you>/review-runner   # your engine key
+   ```
+
+4. Copy
+   [docs/examples/review-runner/.github/workflows/review.yml](docs/examples/review-runner/.github/workflows/review.yml)
+   to `.github/workflows/review.yml` in the runner repo. It calls the reusable
+   workflow `gdevenyi/review-agent/.github/workflows/review.yml`. Use the same
+   review-agent ref in `uses:` and in the `ref` input.
+
+5. Start a Review:
+
+   ```sh
+   gh workflow run review.yml --repo <you>/review-runner \
+     -f pr_url=https://github.com/<owner>/<repo>/pull/<number>
+   ```
+
+   Add `-f publish=true` to publish the Review at once as a COMMENT.
+
+The reusable workflow:
+
+- installs bubblewrap, Claude Code at a pinned version (input
+  `claude_version`) and review-agent at the `ref` input.
+- allows unprivileged user namespaces on the runner, so that bubblewrap can
+  make a sandbox. GitHub's `ubuntu-24.04` runners block them by default. If
+  the sandbox still does not work, the engine runs without it and the log
+  shows a warning.
+- writes the result, the PR URL and the warnings to the job summary. It never
+  writes Review content to the log or to the job summary, and it uploads no
+  artifacts.
+- refuses the Actions `GITHUB_TOKEN`. The Review must show as you, not as
+  `github-actions[bot]`.
+
+Limits of the Action in v1:
+
+- It reads only one GitHub token (the `reviewer_token` secret). Per-organization
+  tokens in `[auth.tokens]` work only with the CLI.
+- The run log stays on the runner and is lost when the job ends.

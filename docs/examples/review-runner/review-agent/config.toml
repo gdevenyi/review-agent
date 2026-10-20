@@ -1,0 +1,15 @@
+# Example config for the runner repo. The reusable workflow puts the
+# `reviewer_token` secret in REVIEW_AGENT_GITHUB_TOKEN and the `engine_key`
+# secret in REVIEW_AGENT_ENGINE_KEY, so keep the default variable names here.
+
+[auth]
+login = "your-github-login"
+
+[engine]
+base_url = "https://api.z.ai/api/anthropic"
+model = "glm-5.3-flash"
+
+[review]
+finding_limit = 10
+# skip_globs = ["docs/generated/**"]
+# language = "ASD-STE100 Simplified Technical English"
