@@ -6,7 +6,9 @@ or posted, and the result carries the error and the run log path.
 1. Load the config. Read the GitHub token for the PR owner (refuse the Actions
    GITHUB_TOKEN) and the engine key from the env.
 2. Preflight: `GET /user` must return the `[auth] login`; warn when the token
-   expires in 14 days or less. 401, 403 SSO and 404 stop the run.
+   expires in 14 days or less. 401, 403 SSO and 404 stop the run. Without
+   `dry_run`: stop if the Reviewer already has a pending review on the PR
+   (a dry run posts nothing, so it skips this check).
 3. Read the PR metadata, the diff and the Repo Guidance (base commit).
 4. Clone the PR head (Workspace).
 5. Build the prompt; run the engine (one retry on invalid Review JSON).
