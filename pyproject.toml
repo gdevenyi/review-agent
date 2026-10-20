@@ -1,0 +1,35 @@
+[project]
+name = "review-agent"
+version = "0.1.0"
+description = "Leave AI-drafted Draft Reviews on GitHub PRs as the Reviewer."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "jsonschema>=4", "ruff>=0.6"]
+
+[project.scripts]
+review = "review_agent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/review_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Real-engine tests spend plan credits: run them only with `pytest -m engine`.
+addopts = "-m 'not engine'"
+markers = [
+    "engine: runs the real Claude Code engine on Z.AI (opt-in; needs claude, bwrap and REVIEW_AGENT_ENGINE_KEY)",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
