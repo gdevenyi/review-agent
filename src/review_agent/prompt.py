@@ -11,6 +11,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib.resources import files
 
+from review_agent.config import DEFAULT_LANGUAGE
+
+STE_STYLE = " (short sentences, active voice, one instruction per sentence)"
+
 TEMPLATE: str = files("review_agent").joinpath("prompt.md").read_text("utf-8")
 
 
@@ -21,6 +25,10 @@ class PromptBuilder:
     diff: str
     # Repo Guidance: file name -> text, from the base commit (ticket #17).
     repo_guidance: Mapping[str, str] = field(default_factory=dict)
+    # Reviewer Instructions prose (global, then per-repo notes). The Reviewer
+    # wrote it, so it is not in an untrusted block.
+    instructions: str = ""
+    language: str = DEFAULT_LANGUAGE
     nonce: str = field(default_factory=lambda: secrets.token_hex(8))
 
     def untrusted(self, text: str) -> str:
@@ -36,9 +44,9 @@ class PromptBuilder:
         parts = [self.title, self.body, self.diff, *self.repo_guidance.values()]
         while any(self.nonce in p for p in parts):
             self.nonce = secrets.token_hex(8)
-        guidance = ""
+        guidance = "(none)"
         if self.repo_guidance:
-            guidance = "\n## Repo Guidance (from the base branch)\n\n" + "\n\n".join(
+            guidance = "\n\n".join(
                 f"### {name}\n\n{self.untrusted(text)}"
                 for name, text in self.repo_guidance.items()
             )
@@ -48,6 +56,9 @@ class PromptBuilder:
             "{BODY}": self.untrusted(self.body or "(empty)"),
             "{DIFF}": self.untrusted(self.diff),
             "{GUIDANCE}": guidance,
+            "{INSTRUCTIONS}": self.instructions.strip() or "(none)",
+            "{LANGUAGE}": self.language
+            + (STE_STYLE if self.language == DEFAULT_LANGUAGE else ""),
         }
         # One pass, so a placeholder inside PR text is not replaced.
         out, rest = [], TEMPLATE

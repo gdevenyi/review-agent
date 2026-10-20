@@ -18,6 +18,7 @@ from review_agent.errors import ReviewAgentError
 CONFIG_ENV = "REVIEW_AGENT_CONFIG"
 DEFAULT_GITHUB_TOKEN_VAR = "REVIEW_AGENT_GITHUB_TOKEN"
 DEFAULT_ENGINE_KEY_VAR = "REVIEW_AGENT_ENGINE_KEY"
+DEFAULT_LANGUAGE = "ASD-STE100 Simplified Technical English"
 
 
 class ConfigError(ReviewAgentError):
@@ -44,8 +45,9 @@ DEFAULT_FINDING_LIMIT = 10
 
 @dataclass(frozen=True)
 class ReviewSettings:
+    language: str = DEFAULT_LANGUAGE  # the language of every Review
     # The whole `[review]` table as read. Typed fields come with the tickets
-    # that use them (Finding limit, skip globs, language).
+    # that use them.
     raw: Mapping[str, object] = field(default_factory=dict)
     # The most inline comments in one Review (`[review] finding_limit`).
     finding_limit: int = DEFAULT_FINDING_LIMIT
@@ -119,6 +121,7 @@ def load_config(explicit: Path | str | None, env: Mapping[str, str]) -> Config:
             model=_str(engine, "model", DEFAULT_MODEL),
         ),
         review=ReviewSettings(
+            language=_str(review, "language", DEFAULT_LANGUAGE),
             raw=dict(review),
             finding_limit=_finding_limit(review, path),
             skip_globs=_skip_globs(review, path),
