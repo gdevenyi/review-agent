@@ -1,0 +1,107 @@
+# Reusable workflow: leave a Draft Review (or, with `publish`, a Published
+# Review as COMMENT) on one Target PR, as the Reviewer.
+#
+# Call it from your PRIVATE runner repo. That repo holds your config file and
+# your secrets. Run logs of a public repo are public. See
+# docs/examples/review-runner.yml and the README.
+#
+# The workflow writes no Review content to the log, to the job summary or to
+# artifacts. It uploads no artifacts.
+name: review
+
+on:
+  workflow_call:
+    inputs:
+      pr_url:
+        description: "Target PR URL: https://github.com/<owner>/<repo>/pull/<number>"
+        required: true
+        type: string
+      publish:
+        description: "Submit the Review at once as a COMMENT (default: Draft Review)"
+        required: false
+        type: boolean
+        default: false
+      ref:
+        description: "The review-agent ref to install. Use the ref of `uses:`."
+        required: false
+        type: string
+        default: master
+      config:
+        description: "Path of the config file in the runner repo"
+        required: false
+        type: string
+        default: review-agent/config.toml
+      claude_version:
+        description: "The Claude Code version to install"
+        required: false
+        type: string
+        default: "2.1.304"
+    secrets:
+      github_token:
+        description: "The Reviewer's GitHub personal access token (not GITHUB_TOKEN)"
+        required: true
+      engine_key:
+        description: "The engine key (for example the Z.AI API key)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the runner repo (config and Reviewer Instructions)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install bubblewrap
+        # On GitHub's ubuntu-24.04 runners AppArmor blocks unprivileged user
+        # namespaces (kernel.apparmor_restrict_unprivileged_userns=1), so
+        # bwrap fails with "setting up uid map: Permission denied". The VM is
+        # used for this job only, so we allow them. Both commands are
+        # best-effort: without them the tool runs the engine without a
+        # sandbox and writes a warning (ADR 0002).
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Claude Code ${{ inputs.claude_version }}
+        env:
+          CLAUDE_VERSION: ${{ inputs.claude_version }}
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install review-agent (${{ inputs.ref }})
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          uv tool install "git+https://github.com/gdevenyi/review-agent@${REF}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show versions
+        run: |
+          claude --version
+          bwrap --version || echo "bwrap is not installed"
+          command -v review
+
+      - name: Review
+        env:
+          PR_URL: ${{ inputs.pr_url }}
+          PUBLISH: ${{ inputs.publish }}
+          REVIEW_AGENT_CONFIG: ${{ github.workspace }}/${{ inputs.config }}
+          REVIEW_AGENT_GITHUB_TOKEN: ${{ secrets.github_token }}
+          REVIEW_AGENT_ENGINE_KEY: ${{ secrets.engine_key }}
+          DISABLE_AUTOUPDATER: "1"
+        run: |
+          args=("$PR_URL" --actions)
+          if [ "$PUBLISH" = "true" ]; then
+            args+=(--publish)
+          fi
+          review "${args[@]}"

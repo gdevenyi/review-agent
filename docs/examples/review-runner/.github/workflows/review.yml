@@ -1,0 +1,41 @@
+# Example workflow for your PRIVATE runner repo (for example
+# <you>/review-runner). Copy it to .github/workflows/review.yml in that repo.
+#
+# Start it from the Actions tab ("Run workflow") or with:
+#   gh workflow run review.yml -R <you>/review-runner -f pr_url=<pr-url>
+#
+# The runner repo holds:
+# - review-agent/config.toml (and optional review-agent/instructions.md and
+#   review-agent/repos/<owner>/<repo>.md)
+# - the repo secrets GH_PR_AGENT (your GitHub personal access token) and
+#   ZAI_API_KEY (your engine key). Use your own names; change them below.
+name: review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_url:
+        description: "PR URL: https://github.com/<owner>/<repo>/pull/<number>"
+        required: true
+        type: string
+      publish:
+        description: "Publish the Review at once as a COMMENT (default: Draft Review)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    # Use the same review-agent ref in `uses:` and in `ref:`.
+    uses: gdevenyi/review-agent/.github/workflows/review.yml@master
+    with:
+      pr_url: ${{ inputs.pr_url }}
+      publish: ${{ inputs.publish }}
+      ref: master
+      config: review-agent/config.toml
+    secrets:
+      github_token: ${{ secrets.GH_PR_AGENT }}
+      engine_key: ${{ secrets.ZAI_API_KEY }}
