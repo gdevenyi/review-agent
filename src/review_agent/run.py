@@ -5,7 +5,7 @@ or posted, and the result carries the error and the run log path.
 
 1. Load the config. Read the GitHub token and the engine key from the env.
 2. Preflight: `GET /user` must return the `[auth] login`.
-3. Read the PR metadata and the diff.
+3. Read the PR metadata, the diff and the Repo Guidance (base commit).
 4. Clone the PR head (Workspace).
 5. Build the prompt; run the engine (one retry on invalid Review JSON).
 6. Map the Review (ReviewMapper).
@@ -33,6 +33,7 @@ from review_agent.config import (
 from review_agent.engine import ClaudeCodeEngine, Engine, EngineError, SandboxMode
 from review_agent.errors import ReviewAgentError
 from review_agent.github import API_URL, GitHubClient, parse_pr_url
+from review_agent.guidance import fetch_repo_guidance, load_instructions
 from review_agent.mapper import (
     InvalidReviewJSON,
     MappedReview,
@@ -130,12 +131,18 @@ def _run(
         _preflight(gh, config)
         meta = gh.get_pull(pr)
         diff = gh.get_diff(pr)
+        guidance = fetch_repo_guidance(gh, pr, meta["base"]["sha"])
     log.info("PR %s: head %s, diff %d bytes", pr, meta["head"]["sha"], len(diff))
 
     factory = options.engine_factory or default_engine_factory(options.sandbox)
     engine = factory(config.engine, engine_key)
     prompt = PromptBuilder(
-        title=meta.get("title") or "", body=meta.get("body") or "", diff=diff
+        title=meta.get("title") or "",
+        body=meta.get("body") or "",
+        diff=diff,
+        repo_guidance=guidance,
+        instructions=load_instructions(config.dir, pr),
+        language=config.review.language,
     ).build()
 
     with Workspace(
