@@ -9,7 +9,7 @@ No network. The steps of `ReviewMapper.map`:
    goes under "General" in the Review body.
 4. Keep at most `finding_limit` inline comments, the most severe first.
 5. Start each comment with its Conventional Comments label; a `suggestion`
-   becomes a GitHub suggestion block (RIGHT side only).
+   becomes a GitHub suggestion block (RIGHT side, 5 lines or fewer only).
 6. End the body with the AI Disclosure.
 
 run.py then applies the output filter (output_filter.py, #16).
@@ -291,6 +291,10 @@ def _skipped(path: str, globs: tuple[str, ...]) -> bool:
     )
 
 
+# A larger suggestion is a plain code block, not a GitHub suggestion block:
+# a one-click change should be small (story 21).
+MAX_SUGGESTION_LINES = 5
+
 # Most severe first. The schema allows only these labels.
 SEVERITY = ("issue (blocking)", "suggestion", "question", "nit")
 
@@ -324,12 +328,14 @@ def _general_text(f: dict) -> str:
 def _text(f: dict, *, suggestion_block: bool, where: str = "") -> str:
     """The Finding as markdown: its Conventional Comments label first, then
     the body, then the suggestion. A GitHub suggestion block works only in an
-    inline comment on the RIGHT side; elsewhere it is a plain code block."""
+    inline comment on the RIGHT side, and only for MAX_SUGGESTION_LINES lines
+    or fewer; else it is a plain code block."""
     text = f"**{f['label']}:** " + (f"{where}: " if where else "") + f["body"].strip()
     if f["suggestion"] is not None:
         code = f["suggestion"].removesuffix("\n")
         longest = max((len(m) for m in re.findall(r"`+", code)), default=0)
         fence = "`" * max(3, longest + 1)
-        info = "suggestion" if suggestion_block else ""
+        small = len(code.splitlines()) <= MAX_SUGGESTION_LINES
+        info = "suggestion" if suggestion_block and small else ""
         text += f"\n\n{fence}{info}\n{code}\n{fence}"
     return text

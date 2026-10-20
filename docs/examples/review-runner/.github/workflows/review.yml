@@ -9,6 +9,8 @@
 #   review-agent/repos/<owner>/<repo>.md)
 # - the repo secrets GH_PR_AGENT (your GitHub personal access token) and
 #   ZAI_API_KEY (your engine key). Use your own names; change them below.
+# - optional: the repo secret EXTRA_TOKENS for `[auth.tokens]` in the config,
+#   one NAME=value line for each token (see the README).
 name: review
 
 on:
@@ -39,3 +41,5 @@ jobs:
     secrets:
       reviewer_token: ${{ secrets.GH_PR_AGENT }}
       engine_key: ${{ secrets.ZAI_API_KEY }}
+      # Optional. It is empty if the runner repo has no EXTRA_TOKENS secret.
+      extra_tokens: ${{ secrets.EXTRA_TOKENS }}

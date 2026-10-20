@@ -25,9 +25,7 @@ def actions(world, monkeypatch, tmp_path, *args):
 
     def fake_run_review(url, opts):
         chosen["options"] = opts
-        return review_agent.run_review(
-            url, world.options(dry_run=opts.dry_run, publish=opts.publish)
-        )
+        return review_agent.run_review(url, world.options(mode=opts.mode))
 
     monkeypatch.setattr(cli_mod, "run_review", fake_run_review)
     code = cli_mod.main([*args, "--actions"])
@@ -97,3 +95,23 @@ def test_actions_publish_says_published_review(world, monkeypatch, tmp_path, cap
     assert "SECRET-" not in out + err + summary
     [write] = world.github.writes
     assert write.body["event"] == "COMMENT"
+
+
+def test_actions_engine_error_shows_a_generic_message_not_the_engine_text(
+    world, monkeypatch, tmp_path, capsys
+):
+    from review_agent.engine import EngineError
+
+    world.engine.respond(EngineError("exit code 1.\nSECRET-STDERR model said this"))
+
+    code, summary, _, _ = actions(world, monkeypatch, tmp_path, PR_URL)
+
+    out, err = capsys.readouterr()
+    assert code == 1
+    assert "SECRET-" not in out + err + summary
+    assert "The engine failed" in summary and "Nothing was posted" in summary
+    assert "::error::The engine failed" in err
+    # The detail stays in the run log file.
+    [log_file] = world.log_dir.iterdir()
+    assert "SECRET-STDERR" in log_file.read_text()
+    assert world.github.writes == []

@@ -221,3 +221,51 @@ def test_a_cut_never_leaves_a_mention_that_pings(world):
 
     assert len(comment) <= 4000
     assert "@" not in comment.replace("`@octocat`", "")
+
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Fixed in other/repo#12.", "Fixed in `other/repo#12`."),
+        ("See Other-Org/my.repo#3 too", "See `Other-Org/my.repo#3` too"),
+        (f"Like other/repo@{SHA[:7]}.", f"Like `other/repo@{SHA[:7]}`."),
+        (f"Like other/repo@{SHA}", f"Like `other/repo@{SHA}`"),
+        # A back-reference to another repo of the same owner is cross-repo too.
+        ("Same as octo/gadgets#1.", "Same as `octo/gadgets#1`."),
+    ],
+)
+def test_cross_repo_references_do_not_link(world, text, expected):
+    comment, _ = _run_with_comment(world, text)
+
+    assert comment == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "See octo/widgets#5 and OCTO/Widgets#6.",
+        f"Like octo/widgets@{SHA[:7]}.",
+        "Use a/b paths, x/y#z and 1/2 cups.",  # not references
+        "See `other/repo#12` in code.",
+        "See https://github.com/octo/widgets/pull/7 here.",
+    ],
+)
+def test_same_repo_references_and_other_text_stay(world, text):
+    comment, _ = _run_with_comment(world, text)
+
+    assert comment == text
+
+
+def test_cross_repo_url_is_put_in_a_code_span_once(world):
+    comment, _ = _run_with_comment(world, "See https://github.com/other/r/pull/1 now")
+
+    assert comment == "See `https://github.com/other/r/pull/1` now"
+
+
+def test_cross_repo_references_in_the_summary_do_not_link(world):
+    _, body = _run_with_comment(world, "x", summary="Relates to other/repo#9.")
+
+    assert body == "Relates to `other/repo#9`."

@@ -41,7 +41,7 @@ from typing import Any
 
 import httpx
 
-from review_agent import Options, RunResult, run_review
+from review_agent import Options, RunMode, RunResult, run_review
 
 OWNER = "octo"
 REPO = "widgets"
@@ -209,10 +209,22 @@ class EngineCall:
     prompt: str
     clone_dir: Path
     clone_files: dict[str, str]  # the clone's files at call time, path -> text
+    timeout: float | None = None  # the time the run gave this engine call
+
+
+class FakeClock:
+    """A monotonic clock that moves only when a fake engine call takes time."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
 
 
 class FakeEngine:
-    """Returns queued responses in order. An Exception in the queue is raised."""
+    """Returns queued responses in order. An Exception in the queue is raised.
+    `respond(..., took=S)`: each of these calls moves `clock` S seconds on."""
 
     name = "Claude Code"
 
@@ -221,23 +233,28 @@ class FakeEngine:
         self.calls: list[EngineCall] = []
         self.api_key: str | None = None  # set by the engine factory
         self.settings = None  # the EngineSettings that run_review passed
-        self._queue: list[str | BaseException] = []
+        self.clock: FakeClock | None = None
+        self._queue: list[tuple[str | BaseException, float]] = []
 
-    def respond(self, *responses: str | BaseException) -> FakeEngine:
-        self._queue.extend(responses)
+    def respond(self, *responses: str | BaseException, took: float = 0) -> FakeEngine:
+        self._queue.extend((r, took) for r in responses)
         return self
 
-    def review(self, prompt: str, clone_dir: Path) -> str:
+    def review(
+        self, prompt: str, clone_dir: Path, *, timeout: float | None = None
+    ) -> str:
         clone_dir = Path(clone_dir)
         files = {
             str(p.relative_to(clone_dir)): p.read_text(errors="replace")
             for p in sorted(clone_dir.rglob("*"))
             if p.is_file() and ".git" not in p.relative_to(clone_dir).parts
         }
-        self.calls.append(EngineCall(prompt, clone_dir, files))
+        self.calls.append(EngineCall(prompt, clone_dir, files, timeout))
         if not self._queue:
             raise AssertionError("FakeEngine called with no queued response")
-        item = self._queue.pop(0)
+        item, took = self._queue.pop(0)
+        if self.clock is not None:
+            self.clock.now += took
         if isinstance(item, BaseException):
             raise item
         return item
@@ -297,6 +314,7 @@ class World:
     pr_url: str = PR_URL
     # The reviews that `GET .../pulls/<n>/reviews` returns (one page).
     reviews: list[dict] = field(default_factory=list)
+    clock: FakeClock = field(default_factory=FakeClock)
 
     def write_config(self, text: str, path: Path | None = None) -> Path:
         path = path or self.config_path
@@ -307,13 +325,14 @@ class World:
     def options(self, **overrides) -> Options:
         kw = dict(
             config_path=self.config_path,
-            dry_run=True,
+            mode=RunMode.DRY_RUN,
             out_dir=self.out_dir,
             log_dir=self.log_dir,
             tmp_root=self.tmp_root,
             env=self.env,
             engine_factory=self._make_engine,
             http_transport=self.github.transport,
+            clock=self.clock,
         )
         kw.update(overrides)
         return Options(**kw)
@@ -439,6 +458,7 @@ def make_world(root: Path) -> World:
         pr=pr,
         diff=DIFF,
     )
+    world.engine.clock = world.clock
     world.write_config(DEFAULT_CONFIG)
     world.install_default_routes()
     return world

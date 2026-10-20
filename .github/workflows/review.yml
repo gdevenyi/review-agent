@@ -3,7 +3,7 @@
 #
 # Call it from your PRIVATE runner repo. That repo holds your config file and
 # your secrets. Run logs of a public repo are public. See
-# docs/examples/review-runner.yml and the README.
+# docs/examples/review-runner/.github/workflows/review.yml and the README.
 #
 # The workflow writes no Review content to the log, to the job summary or to
 # artifacts. It uploads no artifacts.
@@ -43,6 +43,12 @@ on:
       engine_key:
         description: "The engine key (for example the Z.AI API key)"
         required: true
+      extra_tokens:
+        description: >-
+          Optional. More GitHub tokens for `[auth.tokens]` in the config: one
+          NAME=value line per token. Each NAME becomes an environment variable
+          of the review step.
+        required: false
 
 permissions:
   contents: read
@@ -50,7 +56,8 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # The engine has 20 minutes for one run, retry included; the rest is setup.
+    timeout-minutes: 30
     steps:
       - name: Check out the runner repo (config and Reviewer Instructions)
         uses: actions/checkout@v7
@@ -101,8 +108,32 @@ jobs:
           REVIEW_AGENT_CONFIG: ${{ github.workspace }}/${{ inputs.config }}
           REVIEW_AGENT_GITHUB_TOKEN: ${{ secrets.reviewer_token }}
           REVIEW_AGENT_ENGINE_KEY: ${{ secrets.engine_key }}
+          EXTRA_TOKENS: ${{ secrets.extra_tokens }}
           DISABLE_AUTOUPDATER: "1"
         run: |
+          # Extra GitHub tokens for [auth.tokens]: one NAME=value per line.
+          # Mask each value before anything else. Never print a value.
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            case "$line" in '' | '#'*) continue ;; esac
+            name="${line%%=*}"
+            value="${line#*=}"
+            if [ -n "$value" ]; then echo "::add-mask::$value"; fi
+            if [ "$name" = "$line" ] || ! [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+              echo "::error::extra_tokens: each line must be NAME=value."
+              exit 1
+            fi
+            case "$name" in
+              PATH | HOME | SHELL | IFS | ENV | BASH_ENV | LD_* | GITHUB_* | RUNNER_* | \
+                ACTIONS_* | REVIEW_AGENT_* | ANTHROPIC_* | CLAUDE_*)
+                echo "::error::extra_tokens: $name is a reserved name. Use another name."
+                exit 1
+                ;;
+            esac
+            export "$name=$value"
+          done <<< "$EXTRA_TOKENS"
+          unset EXTRA_TOKENS line name value
+
           args=("$PR_URL" --actions)
           if [ "$PUBLISH" = "true" ]; then
             args+=(--publish)

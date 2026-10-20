@@ -77,7 +77,11 @@ class Engine(Protocol):
     name: str
     model: str
 
-    def review(self, prompt: str, clone_dir: Path) -> str: ...
+    def review(
+        self, prompt: str, clone_dir: Path, *, timeout: float | None = None
+    ) -> str:
+        """`timeout`: seconds for this call (default: the engine's own)."""
+        ...
 
 
 class ClaudeCodeEngine:
@@ -110,7 +114,10 @@ class ClaudeCodeEngine:
     def __repr__(self) -> str:  # never show the key
         return f"ClaudeCodeEngine(model={self.model!r}, sandbox={self.sandbox!r})"
 
-    def review(self, prompt: str, clone_dir: Path) -> str:
+    def review(
+        self, prompt: str, clone_dir: Path, *, timeout: float | None = None
+    ) -> str:
+        timeout = self.timeout if timeout is None else timeout
         if not sys.platform.startswith("linux"):
             raise EngineUnavailable(
                 "review-agent supports only Linux, because the engine sandbox "
@@ -130,12 +137,15 @@ class ClaudeCodeEngine:
         claude_real = Path(claude).resolve()
 
         with tempfile.TemporaryDirectory(prefix="review-agent-home-") as home:
+            Path(home, "tmp").mkdir()  # TMPDIR of the engine
             if bwrap is not None:
                 err = _probe_sandbox(bwrap)
             else:
                 err = "`bwrap` is not on PATH"
             if err is None:
-                return self._run_sandboxed(bwrap, claude_real, prompt, clone_dir, home)
+                return self._run_sandboxed(
+                    bwrap, claude_real, prompt, clone_dir, home, timeout
+                )
             if self.sandbox == "require":
                 raise SandboxUnavailable(
                     f"bubblewrap cannot make a sandbox here: {err}. "
@@ -146,7 +156,7 @@ class ClaudeCodeEngine:
                 "WITHOUT a sandbox.",
                 err,
             )
-            return self._run_unsandboxed(claude_real, prompt, clone_dir, home)
+            return self._run_unsandboxed(claude_real, prompt, clone_dir, home, timeout)
 
     def _claude_args(self) -> list[str]:
         return [
@@ -181,9 +191,14 @@ class ClaudeCodeEngine:
         }
 
     def _run_sandboxed(
-        self, bwrap: str, claude: Path, prompt: str, clone: Path, home: str
+        self,
+        bwrap: str,
+        claude: Path,
+        prompt: str,
+        clone: Path,
+        home: str,
+        timeout: float,
     ) -> str:
-        Path(home, "tmp").mkdir()
         env = self._env(SANDBOX_HOME)
         secret_env = {"ANTHROPIC_API_KEY": env.pop("ANTHROPIC_API_KEY")}
         args = [bwrap, *_namespace_args(), *_system_mounts()]
@@ -202,16 +217,19 @@ class ClaudeCodeEngine:
                     f.write(b"--setenv\0" + k.encode() + b"\0" + v.encode() + b"\0")
             args += ["--args", str(r)]
             args += ["--", f"{SANDBOX_CLAUDE_DIR}/{claude.name}", *self._claude_args()]
-            return self._run(args, prompt, cwd=None, env={}, pass_fds=(r,))
+            return self._run(
+                args, prompt, cwd=None, env={}, pass_fds=(r,), timeout=timeout
+            )
         finally:
             os.close(r)
 
     def _run_unsandboxed(
-        self, claude: Path, prompt: str, clone: Path, home: str
+        self, claude: Path, prompt: str, clone: Path, home: str, timeout: float
     ) -> str:
-        Path(home, "tmp").mkdir()
         args = [str(claude), *self._claude_args()]
-        return self._run(args, prompt, cwd=clone, env=self._env(home), pass_fds=())
+        return self._run(
+            args, prompt, cwd=clone, env=self._env(home), pass_fds=(), timeout=timeout
+        )
 
     def _run(
         self,
@@ -221,6 +239,7 @@ class ClaudeCodeEngine:
         cwd: Path | None,
         env: dict[str, str],
         pass_fds: tuple[int, ...],
+        timeout: float,
     ) -> str:
         proc = subprocess.Popen(
             args,
@@ -234,12 +253,12 @@ class ClaudeCodeEngine:
             text=True,
         )
         try:
-            out, err = proc.communicate(prompt, timeout=self.timeout)
+            out, err = proc.communicate(prompt, timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_tree(proc)
             proc.communicate()
             raise EngineTimeout(
-                f"The engine did not finish in {self.timeout:g} seconds. "
+                f"The engine did not finish in {timeout:.0f} seconds. "
                 "Its processes were stopped."
             ) from None
         except BaseException:

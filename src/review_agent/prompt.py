@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib.resources import files
 
-from review_agent.config import DEFAULT_LANGUAGE
+from review_agent.config import DEFAULT_FINDING_LIMIT, DEFAULT_LANGUAGE
 
 STE_STYLE = " (short sentences, active voice, one instruction per sentence)"
 
@@ -29,6 +29,8 @@ class PromptBuilder:
     # wrote it, so it is not in an untrusted block.
     instructions: str = ""
     language: str = DEFAULT_LANGUAGE
+    # The most inline comments in one Review (`[review] finding_limit`).
+    finding_limit: int = DEFAULT_FINDING_LIMIT
     nonce: str = field(default_factory=lambda: secrets.token_hex(8))
 
     def untrusted(self, text: str) -> str:
@@ -56,6 +58,7 @@ class PromptBuilder:
             "{BODY}": self.untrusted(self.body or "(empty)"),
             "{DIFF}": self.untrusted(self.diff),
             "{GUIDANCE}": guidance,
+            "{FINDING_LIMIT}": str(self.finding_limit),
             "{INSTRUCTIONS}": self.instructions.strip() or "(none)",
             "{LANGUAGE}": self.language
             + (STE_STYLE if self.language == DEFAULT_LANGUAGE else ""),

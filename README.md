@@ -93,6 +93,22 @@ start a Review from the GitHub UI (Actions tab, "Run workflow") or with
    gh secret set ZAI_API_KEY --repo <you>/review-runner   # your engine key
    ```
 
+   Optional: per-organization tokens. In the config, map each owner to a
+   variable name in `[auth.tokens]` (for example
+   `SomeOrg = "GH_PR_AGENT_SOMEORG"`). Then put all these tokens in one more
+   secret, one `NAME=value` line for each token. Write the lines in a file
+   with mode 600, give the file to `gh`, then delete the file:
+
+   ```sh
+   # extra-tokens.txt holds lines such as: GH_PR_AGENT_SOMEORG=<token>
+   gh secret set EXTRA_TOKENS --repo <you>/review-runner < extra-tokens.txt
+   rm extra-tokens.txt
+   ```
+
+   The workflow masks each value in the log and makes each `NAME` an
+   environment variable of the review step. It refuses reserved names (for
+   example `GITHUB_*`, `PATH` and `REVIEW_AGENT_*`).
+
 4. Copy
    [docs/examples/review-runner/.github/workflows/review.yml](docs/examples/review-runner/.github/workflows/review.yml)
    to `.github/workflows/review.yml` in the runner repo. It calls the reusable
@@ -121,9 +137,10 @@ The reusable workflow:
   artifacts.
 - refuses the Actions `GITHUB_TOKEN`. The Review must show as you, not as
   `github-actions[bot]`.
+- stops after 30 minutes. The engine has 20 minutes for one run, retry
+  included.
+- shows only "The engine failed" when the engine fails. The detail can
+  quote model output, so it goes only to the run log file.
 
-Limits of the Action in v1:
-
-- It reads only one GitHub token (the `reviewer_token` secret). Per-organization
-  tokens in `[auth.tokens]` work only with the CLI.
-- The run log stays on the runner and is lost when the job ends.
+Limit of the Action in v1: the run log file stays on the runner and is lost
+when the job ends.

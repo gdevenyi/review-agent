@@ -18,14 +18,15 @@ from harness import (
 from test_run_review import assert_failed_with_nothing_written
 
 import review_agent
+from review_agent import RunMode
 from review_agent.engine import EngineTimeout
 from review_agent.github import GitHubClient, PullRef
 from review_agent.mapper import MappedReview
 
 
-def post(world, **overrides):
+def post(world, mode=RunMode.DRAFT, **overrides):
     """Run without --dry-run: the Review goes to (fake) GitHub."""
-    return world.run(dry_run=False, **overrides)
+    return world.run(mode=mode, **overrides)
 
 
 def test_default_run_posts_one_pending_review_with_inline_comments(world):
@@ -60,7 +61,7 @@ def test_default_run_posts_one_pending_review_with_inline_comments(world):
 def test_publish_posts_one_review_with_event_comment(world):
     world.engine.respond(review_json(findings=[finding(line=6)]))
 
-    result = post(world, publish=True)
+    result = post(world, RunMode.PUBLISH)
 
     assert result.ok, result.error
     [write] = world.github.writes
@@ -69,17 +70,6 @@ def test_publish_posts_one_review_with_event_comment(world):
     without_event = {k: v for k, v in write.body.items() if k != "event"}
     assert without_event == result.review.to_payload()
     assert result.posted and result.published
-
-
-def test_dry_run_and_publish_together_are_refused(world):
-    world.engine.respond(review_json())
-
-    result = world.run(dry_run=True, publish=True)
-
-    assert not result.ok
-    assert "--dry-run" in result.error and "--publish" in result.error
-    assert world.github.requests == []
-    assert world.engine.calls == []
 
 
 def test_an_existing_pending_review_stops_the_run_before_the_engine(world):
@@ -139,7 +129,7 @@ def test_pending_review_on_a_later_page_is_found(world):
 def test_engine_failure_posts_nothing(world):
     world.engine.respond(EngineTimeout("The engine did not finish in 1200 seconds."))
 
-    result = post(world, publish=True)
+    result = post(world, RunMode.PUBLISH)
 
     assert_failed_with_nothing_written(world, result)
 
@@ -219,9 +209,7 @@ def cli(world, monkeypatch, *args):
     from review_agent import cli as cli_mod
 
     def fake_run_review(url, opts):
-        return review_agent.run_review(
-            url, world.options(dry_run=opts.dry_run, publish=opts.publish)
-        )
+        return review_agent.run_review(url, world.options(mode=opts.mode))
 
     monkeypatch.setattr(cli_mod, "run_review", fake_run_review)
     return cli_mod.main([*args])
