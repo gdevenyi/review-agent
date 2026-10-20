@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings"],
+  "properties": {
+    "summary": {"type": "string", "description": "1-3 sentences: what the change does and the overall view."},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "path", "start_line", "line", "side", "body", "suggestion"],
+        "properties": {
+          "label": {"type": "string", "enum": ["issue (blocking)", "suggestion", "question", "nit"]},
+          "path": {"type": ["string", "null"], "description": "Repo-relative path, or null for a General finding."},
+          "start_line": {"type": ["integer", "null"], "description": "First line of a multi-line range, else null."},
+          "line": {"type": ["integer", "null"], "description": "Line number in the file version given by side; null for a General finding."},
+          "side": {"type": ["string", "null"], "enum": ["RIGHT", "LEFT", null], "description": "RIGHT = new file (added/context lines), LEFT = old file (deleted lines)."},
+          "body": {"type": "string"},
+          "suggestion": {"type": ["string", "null"], "description": "Replacement text for lines start_line..line on RIGHT, at most ~5 lines, else null."}
+        }
+      }
+    }
+  }
+}
