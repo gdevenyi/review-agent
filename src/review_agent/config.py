@@ -40,12 +40,19 @@ class EngineSettings:
     model: str = DEFAULT_MODEL
 
 
+DEFAULT_FINDING_LIMIT = 10
+
+
 @dataclass(frozen=True)
 class ReviewSettings:
     language: str = DEFAULT_LANGUAGE  # the language of every Review
     # The whole `[review]` table as read. Typed fields come with the tickets
-    # that use them (Finding limit, skip globs).
+    # that use them.
     raw: Mapping[str, object] = field(default_factory=dict)
+    # The most inline comments in one Review (`[review] finding_limit`).
+    finding_limit: int = DEFAULT_FINDING_LIMIT
+    # Globs added to the default skip globs (`[review] skip_globs`).
+    skip_globs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -116,6 +123,8 @@ def load_config(explicit: Path | str | None, env: Mapping[str, str]) -> Config:
         review=ReviewSettings(
             language=_str(review, "language", DEFAULT_LANGUAGE),
             raw=dict(review),
+            finding_limit=_finding_limit(review, path),
+            skip_globs=_skip_globs(review, path),
         ),
     )
 
@@ -125,6 +134,24 @@ def _table(data: dict, name: str, path: Path) -> dict:
     if not isinstance(value, dict):
         raise ConfigError(f"[{name}] in {path} must be a table.")
     return value
+
+
+def _finding_limit(review: dict, path: Path) -> int:
+    value = review.get("finding_limit", DEFAULT_FINDING_LIMIT)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(
+            f"[review] finding_limit in {path} must be a whole number, 0 or more."
+        )
+    return value
+
+
+def _skip_globs(review: dict, path: Path) -> tuple[str, ...]:
+    value = review.get("skip_globs", [])
+    if not isinstance(value, list) or not all(isinstance(g, str) and g for g in value):
+        raise ConfigError(
+            f"[review] skip_globs in {path} must be a list of non-empty strings."
+        )
+    return tuple(value)
 
 
 def _str(table: dict, key: str, default: str) -> str:

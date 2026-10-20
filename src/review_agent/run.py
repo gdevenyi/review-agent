@@ -157,6 +157,8 @@ def _run(
         diff=diff,
         engine_name=engine.name,
         model=engine.model,
+        finding_limit=config.review.finding_limit,
+        skip_globs=config.review.skip_globs,
     ).map(review)
     files = Publisher(pr, pr_url).dry_run(mapped, options.out_dir or Path.cwd())
     for f in files:
