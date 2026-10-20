@@ -8,7 +8,8 @@ or posted, and the result carries the error and the run log path.
 3. Read the PR metadata, the diff and the Repo Guidance (base commit).
 4. Clone the PR head (Workspace).
 5. Build the prompt; run the engine (one retry on invalid Review JSON).
-6. Map the Review (ReviewMapper).
+6. Map the Review (ReviewMapper), then filter it (output_filter; a secret
+   pattern stops the run).
 7. Publish (dry run: write files).
 """
 

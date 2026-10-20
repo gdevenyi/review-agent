@@ -50,12 +50,21 @@ def test_secret_in_review_aborts_and_is_not_echoed(world, kind, where):
     assert fake not in result.log_path.read_text()
 
 
+LABEL = "**issue (blocking):** "
+DISCLOSURE = "\n\n---\n\nDrafted with AI assistance (Claude Code · glm-test)."
+
+
 def _run_with_comment(world, body, summary="Summary."):
+    """Run with one inline Finding. Returns the comment body without its
+    label and the Review body without the AI Disclosure."""
     world.engine.respond(review_json(summary=summary, findings=[finding(body)]))
     result = world.run()
     assert result.ok, result.error
     out = world.output_json()
-    return out["comments"][0]["body"], out["body"]
+    comment, review_body = out["comments"][0]["body"], out["body"]
+    assert comment.startswith(LABEL)
+    assert review_body.endswith(DISCLOSURE)
+    return comment[len(LABEL) :], review_body[: -len(DISCLOSURE)]
 
 
 def test_mentions_do_not_ping(world):
@@ -95,7 +104,17 @@ def test_html_in_code_stays_as_it_is(world):
 
     comment, _ = _run_with_comment(world, text)
 
-    assert comment == text
+    assert comment == text.rstrip()
+
+
+def test_a_suggestion_with_html_and_mentions_stays_as_it_is(world):
+    code = '<a href="https://evil.example">@octocat</a>'
+    world.engine.respond(review_json(findings=[finding("Fix it.", suggestion=code)]))
+
+    result = world.run()
+
+    assert result.ok, result.error
+    assert f"```suggestion\n{code}\n```" in world.output_json()["comments"][0]["body"]
 
 
 TARGET = "https://github.com/octo/widgets"
@@ -158,10 +177,12 @@ def test_each_comment_has_a_length_limit(world):
     out = world.output_json()
     long, short = out["comments"]
     assert len(long["body"]) <= 4000
-    assert long["body"].startswith("word word")
+    assert long["body"].startswith(LABEL + "word word")
     assert "longer than" in long["body"]
-    assert short["body"] == "short"
+    assert short["body"] == LABEL + "short"
     assert len(out["body"]) <= 16000
+    assert out["body"].startswith("SSS")
+    assert out["body"].endswith(DISCLOSURE)
 
 
 def test_a_cut_never_leaves_a_partial_suggestion(world):

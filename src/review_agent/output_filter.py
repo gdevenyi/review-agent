@@ -61,7 +61,7 @@ def filter_review(
 
     return replace(
         mapped,
-        body=_clean(mapped.body, target, MAX_BODY_CHARS),
+        body=_clean_body(mapped.body, target),
         comments=[
             replace(c, body=_clean(c.body, target, MAX_COMMENT_CHARS))
             for c in mapped.comments
@@ -82,6 +82,20 @@ def _check_secrets(text: str, where: str, literals: list[str]) -> None:
                 f"The Review contains text that looks like a secret ({kind}) "
                 f"in {where}. Nothing was written or posted."
             )
+
+
+_FOOTER_SEP = "\n\n---\n\n"
+_MAX_FOOTER_CHARS = 500
+
+
+def _clean_body(body: str, target: PullRef) -> str:
+    """The Review body ends with the AI Disclosure after a `---` line. A cut
+    for length must not remove it: cut the text before it."""
+    head, sep, footer = body.rpartition(_FOOTER_SEP)
+    if not sep or len(footer) > _MAX_FOOTER_CHARS or "\n\n" in footer.strip():
+        return _clean(body, target, MAX_BODY_CHARS)
+    tail = sep + _sanitize(footer, target)
+    return _clean(head, target, MAX_BODY_CHARS - len(tail)) + tail
 
 
 def _clean(text: str, target: PullRef, limit: int) -> str:
