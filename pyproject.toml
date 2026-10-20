@@ -4,10 +4,10 @@ version = "0.1.0"
 description = "Leave AI-drafted Draft Reviews on GitHub PRs as the Reviewer."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["httpx>=0.27", "jsonschema>=4"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "jsonschema>=4", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
 review = "review_agent.cli:main"
