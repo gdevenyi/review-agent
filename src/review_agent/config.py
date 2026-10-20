@@ -30,8 +30,16 @@ class AuthSettings:
     login: str
     github_token_var: str = DEFAULT_GITHUB_TOKEN_VAR
     engine_key_var: str = DEFAULT_ENGINE_KEY_VAR
-    # Owner -> token variable name. Read by token selection (ticket #18).
+    # Owner -> token variable name. Owners not in the map use github_token_var.
     tokens: Mapping[str, str] = field(default_factory=dict)
+
+    def token_var_for(self, owner: str) -> str:
+        """The variable name of the token for this owner. GitHub owner names
+        are not case-sensitive, so the match is not case-sensitive."""
+        for name, var in self.tokens.items():
+            if name.lower() == owner.lower():
+                return var
+        return self.github_token_var
 
 
 @dataclass(frozen=True)
@@ -108,6 +116,12 @@ def load_config(explicit: Path | str | None, env: Mapping[str, str]) -> Config:
     tokens = auth.get("tokens", {})
     if not isinstance(tokens, dict):
         raise ConfigError(f"[auth.tokens] in {path} must be a table.")
+    for owner, var in tokens.items():
+        if not isinstance(var, str) or not var.strip():
+            raise ConfigError(
+                f"[auth.tokens] {owner} in {path} must be the name of an "
+                'environment variable, for example "GH_PR_AGENT_ORG".'
+            )
     return Config(
         path=path,
         auth=AuthSettings(
