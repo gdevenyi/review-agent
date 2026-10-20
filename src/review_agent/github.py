@@ -19,6 +19,10 @@ DIFF_MEDIA_TYPE = "application/vnd.github.diff"
 RAW_MEDIA_TYPE = "application/vnd.github.raw+json"
 API_VERSION = "2022-11-28"
 
+# The only review event that review-agent sends. It never approves and never
+# requests changes.
+COMMENT_EVENT = "COMMENT"
+
 EXPIRATION_HEADER = "github-authentication-token-expiration"
 _REPO_PATH = re.compile(r"^/repos/(?P<owner>[^/]+)/(?P<repo>[^/]+)(?:/|$)")
 
@@ -132,6 +136,20 @@ class GitHubClient:
         self._check_access(resp, path, not_found_ok)
         return resp
 
+    def _post(self, path: str, body: dict) -> httpx.Response:
+        """POST `body` as JSON to `path`. The same access errors as `_get`.
+        The body is Review content: it is never logged."""
+        try:
+            resp = self._http.post(path, json=body)
+        except httpx.HTTPError as e:
+            raise GitHubError(
+                f"POST {path} failed: {e}. GitHub sent no reply, so it is not "
+                "known if it kept the Review. Open the PR to check."
+            ) from None
+        log.info("POST %s -> %s", path, resp.status_code)
+        self._check_access(resp, path, False)
+        return resp
+
     def _check_access(
         self, resp: httpx.Response, path: str, not_found_ok: bool
     ) -> None:
@@ -190,6 +208,43 @@ class GitHubClient:
         if resp.status_code != 200:
             raise GitHubError(_failure(f"Reading {path} at {ref[:12]}", resp))
         return resp.text
+
+    def list_reviews(self, pr: PullRef) -> list[dict]:
+        """All reviews on the PR, every page. GitHub includes the token
+        owner's own pending review; other users' pending reviews are hidden."""
+        path = f"/repos/{pr.owner}/{pr.repo}/pulls/{pr.number}/reviews"
+        reviews: list[dict] = []
+        params: dict[str, str] | None = {"per_page": "100"}
+        url = path
+        for _ in range(100):  # 10 000 reviews is enough
+            resp = self._get(url, params=params)
+            if resp.status_code != 200:
+                raise GitHubError(_failure(f"Reading the reviews of {pr}", resp))
+            reviews.extend(resp.json())
+            nxt = resp.links.get("next", {}).get("url")
+            if not nxt:
+                break
+            # Keep only the path and query: the token goes to base_url only.
+            nxt_url = httpx.URL(nxt)
+            url, params = nxt_url.path, dict(nxt_url.params)
+        return reviews
+
+    def create_review(self, pr: PullRef, payload: dict, *, publish: bool) -> dict:
+        """`POST .../pulls/{n}/reviews`: one request, so GitHub keeps all of
+        the Review or none of it.
+
+        Without `publish` the review is pending (no `event`): a Draft Review.
+        With `publish` the event is COMMENT. No other event can be sent: the
+        payload must not set `event`, and COMMENT is the only value here.
+        """
+        if "event" in payload:
+            raise ValueError("The Review payload must not set 'event'.")
+        body = {**payload, "event": COMMENT_EVENT} if publish else payload
+        path = f"/repos/{pr.owner}/{pr.repo}/pulls/{pr.number}/reviews"
+        resp = self._post(path, body)
+        if resp.status_code != 200:
+            raise GitHubError(_failure(f"Posting the Review on {pr}", resp))
+        return resp.json()
 
     def get_diff(self, pr: PullRef) -> str:
         path = f"/repos/{pr.owner}/{pr.repo}/pulls/{pr.number}"

@@ -52,6 +52,8 @@ GITHUB_TOKEN = "test-github-token"
 ENGINE_KEY = "test-engine-key"
 
 DIFF_MEDIA_TYPE = "application/vnd.github.diff"
+REVIEW_ID = 4242
+REVIEWS_PATH = f"/repos/{OWNER}/{REPO}/pulls/{NUMBER}/reviews"
 
 # The head commit changes `calc.py` from BASE_FILES to HEAD_FILES.
 BASE_FILES = {
@@ -293,6 +295,8 @@ class World:
     login: str = LOGIN
     user_headers: dict[str, str] = field(default_factory=dict)
     pr_url: str = PR_URL
+    # The reviews that `GET .../pulls/<n>/reviews` returns (one page).
+    reviews: list[dict] = field(default_factory=list)
 
     def write_config(self, text: str, path: Path | None = None) -> Path:
         path = path or self.config_path
@@ -341,6 +345,28 @@ class World:
             repo_path,
             accept=DIFF_MEDIA_TYPE,
             handler=lambda r: httpx.Response(200, text=self.diff),
+        )
+        gh.route(
+            "GET",
+            f"{repo_path}/reviews",
+            handler=lambda r: httpx.Response(200, json=self.reviews),
+        )
+        gh.route("POST", f"{repo_path}/reviews", handler=self._create_review)
+
+    def _create_review(self, request: httpx.Request) -> httpx.Response:
+        """Like GitHub: no `event` gives a PENDING review; COMMENT submits it."""
+        body = json.loads(request.content)
+        state = {None: "PENDING", "COMMENT": "COMMENTED"}.get(body.get("event"))
+        if state is None:
+            return httpx.Response(422, json={"message": "Unprocessable Entity"})
+        return httpx.Response(
+            200,
+            json={
+                "id": REVIEW_ID,
+                "state": state,
+                "user": {"login": self.login},
+                "html_url": f"{PR_URL}#pullrequestreview-{REVIEW_ID}",
+            },
         )
 
     # Outputs.
