@@ -1,6 +1,5 @@
 """Seam 1: run_review(pr_url, options) with a fake GitHub and a fake Engine."""
 
-import pytest
 from harness import (
     DIFF,
     DIFF_MEDIA_TYPE,
@@ -8,16 +7,10 @@ from harness import (
     GITHUB_TOKEN,
     HEAD_FILES,
     finding,
-    make_world,
     review_json,
 )
 
 from review_agent.engine import EngineTimeout
-
-
-@pytest.fixture
-def world(tmp_path):
-    return make_world(tmp_path)
 
 
 def test_dry_run_writes_review_files_and_posts_nothing(world):
