@@ -40,7 +40,11 @@ holds only the names of the variables. The default names are
    ```
 
    Use the name of the secret that your workflow reads. `gh` asks for the
-   value; do not put the value on the command line.
+   value; do not put the value on the command line. For an organization
+   token, update its `NAME=value` line in the `EXTRA_TOKENS` secret: write all
+   the lines in a file with mode 600, run
+   `gh secret set EXTRA_TOKENS --repo <you>/review-runner < <file>`, then
+   delete the file.
 6. Do a test run: `review <pr-url> --dry-run`. The tool checks that the token
    belongs to your `[auth] login` and that it can read the PR. Nothing is
    posted.

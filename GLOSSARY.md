@@ -14,11 +14,15 @@ _Avoid_: comment, feedback, report
 
 **Draft Review**:
 A Review left pending on GitHub, visible only to the Reviewer until the Reviewer edits and submits it. This is the default outcome.
-_Avoid_: preview, dry run
+_Avoid_: preview, draft file
 
 **Published Review**:
 A Review the tool submits directly, visible to everyone. Only on explicit request, and never as an approval.
 _Avoid_: auto-review
+
+**Dry Run**:
+A run that writes the Review to local files and posts nothing to GitHub. It is not a Draft Review: nothing is left on the Target PR.
+_Avoid_: preview, test run
 
 **Finding**:
 One problem, suggestion, or question the Review raises. It carries a Conventional Comments label (`issue (blocking)`, `suggestion`, `question`, `nit`). A Finding tied to a diff line becomes an inline comment; any other Finding goes under "General" in the Review summary.

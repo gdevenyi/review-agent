@@ -1,9 +1,16 @@
 # Example config for the runner repo. The reusable workflow puts the
 # `reviewer_token` secret in REVIEW_AGENT_GITHUB_TOKEN and the `engine_key`
 # secret in REVIEW_AGENT_ENGINE_KEY, so keep the default variable names here.
+# Each NAME=value line of the optional `extra_tokens` secret becomes the
+# variable NAME, for `[auth.tokens]`.
 
 [auth]
 login = "your-github-login"
+
+# Optional: one token for each organization. The values are variable names
+# from the `extra_tokens` secret.
+# [auth.tokens]
+# SomeOrg = "GH_PR_AGENT_SOMEORG"
 
 [engine]
 base_url = "https://api.z.ai/api/anthropic"
