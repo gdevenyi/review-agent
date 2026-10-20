@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 API_URL = "https://api.github.com"
 JSON_MEDIA_TYPE = "application/vnd.github+json"
 DIFF_MEDIA_TYPE = "application/vnd.github.diff"
+RAW_MEDIA_TYPE = "application/vnd.github.raw+json"
 API_VERSION = "2022-11-28"
 
 EXPIRATION_HEADER = "github-authentication-token-expiration"
@@ -112,17 +113,28 @@ class GitHubClient:
     def close(self) -> None:
         self._http.close()
 
-    def _get(self, path: str, *, accept: str | None = None) -> httpx.Response:
+    def _get(
+        self,
+        path: str,
+        *,
+        accept: str | None = None,
+        params: dict[str, str] | None = None,
+        not_found_ok: bool = False,
+    ) -> httpx.Response:
+        """GET `path`. 401, 403 SSO and 404 raise errors that name the token
+        variable; with `not_found_ok` the caller handles 404 itself."""
         headers = {"Accept": accept} if accept else None
         try:
-            resp = self._http.get(path, headers=headers)
+            resp = self._http.get(path, headers=headers, params=params)
         except httpx.HTTPError as e:
             raise GitHubError(f"GET {path} failed: {e}") from None
         log.info("GET %s -> %s", path, resp.status_code)
-        self._check_access(resp, path)
+        self._check_access(resp, path, not_found_ok)
         return resp
 
-    def _check_access(self, resp: httpx.Response, path: str) -> None:
+    def _check_access(
+        self, resp: httpx.Response, path: str, not_found_ok: bool
+    ) -> None:
         """Turn 401, 403 SSO and 404 into errors the Reviewer can act on."""
         var = self.token_var
         if resp.status_code == 401:
@@ -140,7 +152,7 @@ class GitHubClient:
                 f"in {var}. {where}, then run the review again."
             )
         m = _REPO_PATH.match(path)
-        if resp.status_code == 404 and m:
+        if resp.status_code == 404 and m and not not_found_ok:
             raise RepoNotVisible(
                 f"GitHub returned 404 for {m['owner']}/{m['repo']}. The token in "
                 f"{var} cannot see this repo, or the repo or PR does not exist. "
@@ -163,6 +175,21 @@ class GitHubClient:
         if resp.status_code != 200:
             raise GitHubError(_failure(f"Reading {pr}", resp))
         return resp.json()
+
+    def get_contents(self, pr: PullRef, path: str, ref: str) -> str | None:
+        """The text of `path` at commit `ref` in the PR's repo, or None if the
+        file is not there (404). Other failures raise GitHubError."""
+        resp = self._get(
+            f"/repos/{pr.owner}/{pr.repo}/contents/{path}",
+            accept=RAW_MEDIA_TYPE,
+            params={"ref": ref},
+            not_found_ok=True,
+        )
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise GitHubError(_failure(f"Reading {path} at {ref[:12]}", resp))
+        return resp.text
 
     def get_diff(self, pr: PullRef) -> str:
         path = f"/repos/{pr.owner}/{pr.repo}/pulls/{pr.number}"

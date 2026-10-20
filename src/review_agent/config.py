@@ -18,6 +18,7 @@ from review_agent.errors import ReviewAgentError
 CONFIG_ENV = "REVIEW_AGENT_CONFIG"
 DEFAULT_GITHUB_TOKEN_VAR = "REVIEW_AGENT_GITHUB_TOKEN"
 DEFAULT_ENGINE_KEY_VAR = "REVIEW_AGENT_ENGINE_KEY"
+DEFAULT_LANGUAGE = "ASD-STE100 Simplified Technical English"
 
 
 class ConfigError(ReviewAgentError):
@@ -49,8 +50,9 @@ class EngineSettings:
 
 @dataclass(frozen=True)
 class ReviewSettings:
+    language: str = DEFAULT_LANGUAGE  # the language of every Review
     # The whole `[review]` table as read. Typed fields come with the tickets
-    # that use them (Finding limit, skip globs, language).
+    # that use them (Finding limit, skip globs).
     raw: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -125,7 +127,10 @@ def load_config(explicit: Path | str | None, env: Mapping[str, str]) -> Config:
             base_url=_str(engine, "base_url", DEFAULT_BASE_URL),
             model=_str(engine, "model", DEFAULT_MODEL),
         ),
-        review=ReviewSettings(raw=dict(review)),
+        review=ReviewSettings(
+            language=_str(review, "language", DEFAULT_LANGUAGE),
+            raw=dict(review),
+        ),
     )
 
 
