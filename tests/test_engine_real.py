@@ -1,6 +1,7 @@
 """Seam 2 (opt-in): the real ClaudeCodeEngine in bubblewrap on the endpoint.
 
-Skipped unless `claude`, `bwrap` and REVIEW_AGENT_ENGINE_KEY are present.
+Run with `pytest -m engine`. Skipped unless `claude`, `bwrap` and
+REVIEW_AGENT_ENGINE_KEY are present.
 Optional: REVIEW_AGENT_ENGINE_BASE_URL, REVIEW_AGENT_ENGINE_MODEL.
 """
 

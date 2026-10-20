@@ -21,6 +21,8 @@ packages = ["src/review_agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Real-engine tests spend plan credits: run them only with `pytest -m engine`.
+addopts = "-m 'not engine'"
 markers = [
     "engine: runs the real Claude Code engine on Z.AI (opt-in; needs claude, bwrap and REVIEW_AGENT_ENGINE_KEY)",
 ]
