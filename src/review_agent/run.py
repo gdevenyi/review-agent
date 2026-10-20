@@ -3,8 +3,10 @@
 The steps, in order. A failure at any step stops the run; nothing is written
 or posted, and the result carries the error and the run log path.
 
-1. Load the config. Read the GitHub token and the engine key from the env.
-2. Preflight: `GET /user` must return the `[auth] login`.
+1. Load the config. Read the GitHub token for the PR owner (refuse the Actions
+   GITHUB_TOKEN) and the engine key from the env.
+2. Preflight: `GET /user` must return the `[auth] login`; warn when the token
+   expires in 14 days or less. 401, 403 SSO and 404 stop the run.
 3. Read the PR metadata, the diff and the Repo Guidance (base commit).
 4. Clone the PR head (Workspace).
 5. Build the prompt; run the engine (one retry on invalid Review JSON).
@@ -42,6 +44,7 @@ from review_agent.mapper import (
 )
 from review_agent.prompt import PromptBuilder
 from review_agent.publisher import Publisher
+from review_agent.tokens import expiry_warnings, select_token
 from review_agent.workspace import Workspace
 
 log = logging.getLogger("review_agent")
@@ -91,6 +94,8 @@ class RunResult:
     error: str | None = None
     files: list[Path] = field(default_factory=list)
     review: MappedReview | None = None
+    # Warnings for the Reviewer, for example a token that expires soon.
+    warnings: list[str] = field(default_factory=list)
 
 
 def run_review(pr_url: str, options: Options | None = None) -> RunResult:
@@ -98,36 +103,48 @@ def run_review(pr_url: str, options: Options | None = None) -> RunResult:
     env = os.environ if options.env is None else options.env
     log_path, handler = _start_log(pr_url, options, env)
     log.info("Review of %s started", pr_url)
+    warnings: list[str] = []
     try:
-        files, review = _run(pr_url, options, env)
+        files, review = _run(pr_url, options, env, warnings)
     except (ReviewAgentError, EngineError) as e:
         log.error("Run failed: %s", e)
-        return RunResult(False, pr_url, log_path, error=str(e))
+        return RunResult(False, pr_url, log_path, error=str(e), warnings=warnings)
     except Exception as e:  # report every failure the same way
         log.exception("Run failed with an unexpected error")
         return RunResult(
-            False, pr_url, log_path, error=f"Unexpected error: {type(e).__name__}: {e}"
+            False,
+            pr_url,
+            log_path,
+            error=f"Unexpected error: {type(e).__name__}: {e}",
+            warnings=warnings,
         )
     finally:
         _stop_log(handler)
-    return RunResult(True, pr_url, log_path, files=files, review=review)
+    return RunResult(
+        True, pr_url, log_path, files=files, review=review, warnings=warnings
+    )
 
 
 def _run(
-    pr_url: str, options: Options, env: Mapping[str, str]
+    pr_url: str, options: Options, env: Mapping[str, str], warnings: list[str]
 ) -> tuple[list[Path], MappedReview]:
     if not options.dry_run:
         raise ReviewAgentError("Posting a Review is not available yet. Use --dry-run.")
     pr = parse_pr_url(pr_url)
     config = load_config(options.config_path, env)
     log.info("Config: %s", config.path)
-    token = read_secret(env, config.auth.github_token_var, "GitHub token")
+    token_var, token = select_token(config.auth, pr.owner, env)
+    log.info("GitHub token for %s: %s", pr.owner, token_var)
     engine_key = read_secret(env, config.auth.engine_key_var, "engine key")
 
     with GitHubClient(
-        token, base_url=options.api_url, transport=options.http_transport
+        token,
+        token_var=token_var,
+        base_url=options.api_url,
+        transport=options.http_transport,
     ) as gh:
         _preflight(gh, config)
+        warnings.extend(expiry_warnings(gh.token_expiration, token_var))
         meta = gh.get_pull(pr)
         diff = gh.get_diff(pr)
         guidance = fetch_repo_guidance(gh, pr, meta["base"]["sha"])
@@ -170,7 +187,7 @@ def _preflight(gh: GitHubClient, config: Config) -> None:
     login = gh.get_user().get("login")
     if login != config.auth.login:
         raise LoginMismatch(
-            f"The GitHub token in {config.auth.github_token_var} belongs to "
+            f"The GitHub token in {gh.token_var} belongs to "
             f"{login!r}, not to the configured Reviewer {config.auth.login!r}. "
             "The engine did not run."
         )
