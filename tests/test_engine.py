@@ -5,7 +5,9 @@ bubblewrap run the real `bwrap`, so they check the real sandbox.
 """
 
 import json
+import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -178,7 +180,8 @@ def test_engine_runs_claude_headless_with_read_only_tools(world):
     assert value("--tools") == "Read,Grep,Glob"
     assert value("--permission-mode") == "dontAsk"
     assert value("--model") == "glm-test"
-    assert value("--output-format") == "json"
+    assert value("--output-format") == "stream-json"
+    assert "--verbose" in argv
     assert json.loads(value("--json-schema")) == REVIEW_SCHEMA
 
 
@@ -248,3 +251,161 @@ def test_timeout_kills_the_engine_process_tree(world):
         ["pgrep", "-f", f"sleep {marker}"], capture_output=True, text=True
     )
     assert left.stdout == ""
+
+
+# A fake `claude` that streams `--output-format stream-json` events like the
+# real CLI: init, assistant turns with text, thinking and tool calls, tool
+# results, then the result event. After the tool calls it waits (up to 10 s)
+# for WAIT_FOR to exist. The test makes that file when it sees the progress
+# line, so the run can finish only if review() logs events while the engine
+# still runs.
+STREAMER = r"""#!/usr/bin/env python3
+import json, os, sys, time
+
+sys.stdin.read()
+root = os.getcwd()
+
+def emit(event):
+    print(json.dumps(event), flush=True)
+    time.sleep(0.05)
+
+def assistant(*content):
+    emit({"type": "assistant", "message": {"role": "assistant",
+          "content": list(content)}})
+
+def tool(name, **inp):
+    return {"type": "tool_use", "id": "t-" + name, "name": name, "input": inp}
+
+emit({"type": "system", "subtype": "init", "model": "glm-test", "cwd": root,
+      "tools": ["Glob", "Grep", "Read", "StructuredOutput"]})
+assistant({"type": "text", "text": "SECRET-ASSISTANT-TEXT"})
+assistant({"type": "thinking", "thinking": "SECRET-THINKING"})
+assistant(tool("Glob", pattern="**/*.py"))
+assistant(tool("Grep", pattern="def \x1b[31madd\n", path=root + "/src"))
+emit({"type": "user", "message": {"role": "user", "content": [
+      {"type": "tool_result", "tool_use_id": "t-Grep",
+       "content": "SECRET-TOOL-RESULT"}]},
+      "tool_use_result": {"content": "SECRET-TOOL-RESULT"}})
+assistant(tool("Read", file_path=root + "/src/" + "x" * 300 + ".py"))
+assistant(tool("Read", file_path=root + "/src/a.py"))
+deadline = time.monotonic() + 10
+while not os.path.exists(WAIT_FOR):
+    if time.monotonic() > deadline:
+        sys.exit(3)
+    time.sleep(0.05)
+time.sleep(SLEEP_AT_END)
+review = {"summary": "s", "findings": []}
+assistant(tool("StructuredOutput", **review))
+emit({"type": "result", "subtype": "success", "is_error": False,
+      "num_turns": 7, "duration_ms": 12345, "total_cost_usd": 0.0225,
+      "usage": {"input_tokens": 4224, "output_tokens": 236},
+      "result": "SECRET-RESULT-TEXT", "structured_output": review})
+"""
+
+
+def streamer_script(wait_for: str, sleep_at_end: float = 0.0) -> str:
+    return STREAMER.replace("WAIT_FOR", repr(wait_for)).replace(
+        "SLEEP_AT_END", repr(sleep_at_end)
+    )
+
+
+class _Recorder(logging.Handler):
+    """Records review_agent INFO messages. Makes the file `touch` when it
+    sees a message that contains `trigger`."""
+
+    def __init__(self, trigger, touch):
+        super().__init__(logging.INFO)
+        self.messages = []
+        self.trigger, self.touch = trigger, touch
+
+    def emit(self, record):
+        msg = record.getMessage()
+        self.messages.append(msg)
+        if self.trigger in msg:
+            Path(self.touch).touch()
+
+
+@pytest.fixture
+def recorder():
+    made = []
+    logger = logging.getLogger("review_agent")
+    old = logger.level
+    logger.setLevel(logging.DEBUG)
+
+    def make(trigger, touch):
+        r = _Recorder(trigger, touch)
+        logger.addHandler(r)
+        made.append(r)
+        return r
+
+    yield make
+    for r in made:
+        logger.removeHandler(r)
+    logger.setLevel(old)
+
+
+def test_engine_logs_progress_live_while_it_runs(broken_bwrap, recorder):
+    wait_for = broken_bwrap.parent / "seen"
+    make_bin(broken_bwrap.parent / "bin", "claude", streamer_script(str(wait_for)))
+    rec = recorder("Engine: Read src/a.py", wait_for)
+
+    raw = engine(sandbox="warn").review("p", broken_bwrap)
+
+    assert json.loads(raw) == {"summary": "s", "findings": []}
+    progress = [m for m in rec.messages if m.startswith("Engine")]
+    assert progress[0] == "Engine session started: model glm-test"
+    assert progress[1] == "Engine: Glob **/*.py"
+    # Control characters (ESC, newline) are removed.
+    assert progress[2] == "Engine: Grep def [31madd in src"
+    assert progress[3].startswith("Engine: Read src/xxx")
+    assert len(progress[3]) <= 120
+    assert progress[4] == "Engine: Read src/a.py"
+    assert progress[5] == "Engine: StructuredOutput"
+    assert progress[6] == (
+        "Engine finished: 7 turns, 5 tool calls, 12 s, "
+        "cost $0.0225, 4224 input tokens, 236 output tokens"
+    )
+    assert "SECRET" not in "\n".join(rec.messages)
+
+
+def test_engine_logs_a_heartbeat_while_it_runs(broken_bwrap, recorder):
+    wait_for = broken_bwrap.parent / "seen"
+    make_bin(
+        broken_bwrap.parent / "bin",
+        "claude",
+        streamer_script(str(wait_for), sleep_at_end=0.5),
+    )
+    rec = recorder("Engine: Read src/a.py", wait_for)
+
+    engine(sandbox="warn", heartbeat=0.1).review("p", broken_bwrap)
+
+    beats = [m for m in rec.messages if m.startswith("Engine running:")]
+    assert any(m.endswith(" s, 4 tool calls") for m in beats), rec.messages
+    for m in beats:
+        assert re.fullmatch(r"Engine running: \d+ s, \d+ tool calls", m)
+
+
+@needs_bwrap
+def test_sandboxed_engine_logs_paths_relative_to_the_clone(world, recorder):
+    # Inside the sandbox the clone is /repo (read-only), so the fake waits
+    # for a file that the test makes in the clone on the host.
+    make_bin(world.parent / "bin", "claude", streamer_script("/repo/seen"))
+    rec = recorder("Engine: Read src/a.py", world / "seen")
+
+    raw = engine().review("p", world)
+
+    assert json.loads(raw) == {"summary": "s", "findings": []}
+    assert "Engine: Read src/a.py" in rec.messages
+    assert "Engine: Grep def [31madd in src" in rec.messages
+
+
+def test_engine_error_result_in_the_stream_is_an_error(broken_bwrap):
+    make_bin(
+        broken_bwrap.parent / "bin",
+        "claude",
+        "#!/bin/sh\ncat >/dev/null\n"
+        'echo \'{"type":"system","subtype":"init","model":"m"}\'\n'
+        'echo \'{"type":"result","is_error":true,"result":"API Error: 529"}\'\n',
+    )
+    with pytest.raises(EngineError, match="529"):
+        engine(sandbox="warn").review("p", broken_bwrap)

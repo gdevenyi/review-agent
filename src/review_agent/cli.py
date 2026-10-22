@@ -77,6 +77,10 @@ def main(argv: list[str] | None = None) -> int:
     logger = logging.getLogger("review_agent")
     logger.addHandler(progress)
     logger.addHandler(logged_warnings)
+    # The progress handler shows INFO (for example the live engine progress
+    # of review_agent.engine), also when there is no run log to set a level.
+    if logger.level == logging.NOTSET or logger.level > logging.INFO:
+        logger.setLevel(logging.INFO)
     if args.dry_run:
         mode = RunMode.DRY_RUN
     elif args.publish:

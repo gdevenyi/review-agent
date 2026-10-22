@@ -8,11 +8,14 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -23,6 +26,7 @@ log = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://api.z.ai/api/anthropic"
 DEFAULT_MODEL = "glm-5.3-flash"
 DEFAULT_TIMEOUT = 20 * 60
+DEFAULT_HEARTBEAT = 30  # seconds between "Engine running" log lines
 
 # Fixed paths inside the sandbox. The host layout does not leak in.
 SANDBOX_CLONE = "/repo"
@@ -102,6 +106,7 @@ class ClaudeCodeEngine:
         model: str = DEFAULT_MODEL,
         sandbox: SandboxMode = "require",
         timeout: float = DEFAULT_TIMEOUT,
+        heartbeat: float = DEFAULT_HEARTBEAT,
     ):
         if sandbox not in ("require", "warn"):
             raise ValueError(f"sandbox must be 'require' or 'warn', not {sandbox!r}")
@@ -110,6 +115,7 @@ class ClaudeCodeEngine:
         self.model = model
         self.sandbox = sandbox
         self.timeout = timeout
+        self.heartbeat = heartbeat
 
     def __repr__(self) -> str:  # never show the key
         return f"ClaudeCodeEngine(model={self.model!r}, sandbox={self.sandbox!r})"
@@ -175,8 +181,11 @@ class ClaudeCodeEngine:
             self.model,
             "--json-schema",
             REVIEW_SCHEMA_TEXT,
+            # stream-json gives one event per line while the engine runs, so
+            # the progress can go to the log live. It needs --verbose.
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
         ]
 
     def _env(self, home: str) -> dict[str, str]:
@@ -218,7 +227,13 @@ class ClaudeCodeEngine:
             args += ["--args", str(r)]
             args += ["--", f"{SANDBOX_CLAUDE_DIR}/{claude.name}", *self._claude_args()]
             return self._run(
-                args, prompt, cwd=None, env={}, pass_fds=(r,), timeout=timeout
+                args,
+                prompt,
+                cwd=None,
+                env={},
+                pass_fds=(r,),
+                timeout=timeout,
+                root=SANDBOX_CLONE,
             )
         finally:
             os.close(r)
@@ -228,7 +243,13 @@ class ClaudeCodeEngine:
     ) -> str:
         args = [str(claude), *self._claude_args()]
         return self._run(
-            args, prompt, cwd=clone, env=self._env(home), pass_fds=(), timeout=timeout
+            args,
+            prompt,
+            cwd=clone,
+            env=self._env(home),
+            pass_fds=(),
+            timeout=timeout,
+            root=str(clone),
         )
 
     def _run(
@@ -240,7 +261,12 @@ class ClaudeCodeEngine:
         env: dict[str, str],
         pass_fds: tuple[int, ...],
         timeout: float,
+        root: str,
     ) -> str:
+        """Run the engine and read its stream-json events as they arrive.
+
+        Progress goes to the log live. The return value comes from the
+        final `result` event."""
         proc = subprocess.Popen(
             args,
             cwd=cwd,
@@ -251,26 +277,166 @@ class ClaudeCodeEngine:
             pass_fds=pass_fds,
             start_new_session=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
+        progress = _Progress(root)
+        timed_out = threading.Event()
+        done = threading.Event()
+        err_lines: list[str] = []
+
+        def feed() -> None:
+            with contextlib.suppress(OSError):  # the engine can exit early
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+
+        def drain_stderr() -> None:
+            err_lines.extend(proc.stderr)
+
+        def watch() -> None:
+            # Heartbeat, and the timeout: kill the whole process group.
+            deadline = time.monotonic() + timeout
+            next_beat = time.monotonic() + self.heartbeat
+            while True:
+                now = time.monotonic()
+                if done.wait(max(0.0, min(deadline, next_beat) - now)):
+                    return
+                now = time.monotonic()
+                if now >= deadline:
+                    timed_out.set()
+                    _kill_tree(proc)
+                    return
+                if now >= next_beat:
+                    progress.heartbeat()
+                    next_beat = now + self.heartbeat
+
+        threads = [
+            threading.Thread(target=f, daemon=True) for f in (feed, drain_stderr, watch)
+        ]
+        for t in threads:
+            t.start()
+        result_line = ""
         try:
-            out, err = proc.communicate(prompt, timeout=timeout)
-        except subprocess.TimeoutExpired:
+            for line in proc.stdout:
+                if progress.event(line):
+                    result_line = line
+            proc.wait()
+        except BaseException:
             _kill_tree(proc)
-            proc.communicate()
+            proc.wait()
+            raise
+        finally:
+            done.set()
+            for t in threads:
+                t.join(timeout=5)
+        if timed_out.is_set():
             raise EngineTimeout(
                 f"The engine did not finish in {timeout:.0f} seconds. "
                 "Its processes were stopped."
-            ) from None
-        except BaseException:
-            _kill_tree(proc)
-            proc.communicate()
-            raise
-        return _parse_output(proc.returncode, out, err)
+            )
+        return _parse_output(proc.returncode, result_line, "".join(err_lines))
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)
+
+
+MAX_PROGRESS_LINE = 120
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _clean(text: str) -> str:
+    """One safe log line: no control characters, at most MAX_PROGRESS_LINE."""
+    text = _CONTROL.sub("", text)
+    if len(text) > MAX_PROGRESS_LINE:
+        text = text[: MAX_PROGRESS_LINE - 3] + "..."
+    return text
+
+
+class _Progress:
+    """Logs engine progress from stream-json events, at INFO.
+
+    It logs only the session start, the tool names with their path or
+    pattern, a heartbeat and the final counts. Never assistant text,
+    thinking, tool results or file contents: they can quote private code."""
+
+    def __init__(self, root: str):
+        self.root = root.rstrip("/") + "/"
+        self.start = time.monotonic()
+        self.tool_calls = 0
+
+    def event(self, line: str) -> bool:
+        """Log one event. Returns True if it is the `result` event."""
+        try:
+            e = json.loads(line)
+        except ValueError:
+            return False
+        if not isinstance(e, dict):
+            return False
+        kind = e.get("type")
+        if kind == "system" and e.get("subtype") == "init":
+            log.info(_clean(f"Engine session started: model {e.get('model')}"))
+        elif kind == "assistant":
+            content = (e.get("message") or {}).get("content")
+            for block in content if isinstance(content, list) else ():
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    self.tool_calls += 1
+                    log.info(_clean(self._tool(block)))
+        elif kind == "result":
+            log.info(self._finished(e))
+            return True
+        return False
+
+    def heartbeat(self) -> None:
+        log.info(
+            "Engine running: %.0f s, %d tool calls",
+            time.monotonic() - self.start,
+            self.tool_calls,
+        )
+
+    def _rel(self, path: object) -> str:
+        path = str(path)
+        if path + "/" == self.root:
+            return "."
+        return path.removeprefix(self.root)
+
+    def _tool(self, block: dict) -> str:
+        name = str(block.get("name"))
+        inp = block.get("input")
+        inp = inp if isinstance(inp, dict) else {}
+        parts = [f"Engine: {name}"]
+        if name == "Read" and "file_path" in inp:
+            parts.append(self._rel(inp["file_path"]))
+        elif name in ("Grep", "Glob"):
+            if "pattern" in inp:
+                parts.append(str(inp["pattern"]))
+            if "path" in inp:
+                parts.append(f"in {self._rel(inp['path'])}")
+        return " ".join(parts)
+
+    def _finished(self, e: dict) -> str:
+        parts = [
+            f"{e.get('num_turns', '?')} turns",
+            f"{self.tool_calls} tool calls",
+        ]
+        ms = e.get("duration_ms")
+        secs = ms / 1000 if isinstance(ms, int | float) else self._elapsed()
+        parts.append(f"{secs:.0f} s")
+        cost = e.get("total_cost_usd")
+        if isinstance(cost, int | float):
+            parts.append(f"cost ${cost:.4f}")
+        usage = e.get("usage") if isinstance(e.get("usage"), dict) else {}
+        for key, label in (
+            ("input_tokens", "input tokens"),
+            ("output_tokens", "output tokens"),
+        ):
+            if isinstance(usage.get(key), int):
+                parts.append(f"{usage[key]} {label}")
+        return "Engine finished: " + ", ".join(parts)
+
+    def _elapsed(self) -> float:
+        return time.monotonic() - self.start
 
 
 def _parse_output(returncode: int, out: str, err: str) -> str:

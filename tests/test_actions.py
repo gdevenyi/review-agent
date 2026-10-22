@@ -115,3 +115,33 @@ def test_actions_engine_error_shows_a_generic_message_not_the_engine_text(
     [log_file] = world.log_dir.iterdir()
     assert "SECRET-STDERR" in log_file.read_text()
     assert world.github.writes == []
+
+
+def test_actions_engine_progress_reaches_the_job_log_without_a_run_log(
+    world, monkeypatch, tmp_path, capsys
+):
+    # The run log cannot be made (its dir is a file). The INFO progress
+    # lines of the engine must still go to the job log.
+    import logging
+
+    world.log_dir = tmp_path / "not-a-dir"
+    world.log_dir.write_text("")
+    world.engine.respond(review_json())
+    fake_review = world.engine.review
+
+    def review(*args, **kw):
+        logging.getLogger("review_agent.engine").info("Engine: Read calc.py")
+        return fake_review(*args, **kw)
+
+    monkeypatch.setattr(world.engine, "review", review)
+    logger = logging.getLogger("review_agent")
+    old = logger.level
+    logger.setLevel(logging.NOTSET)  # as in a new process
+    try:
+        code, _, _, _ = actions(world, monkeypatch, tmp_path, PR_URL)
+    finally:
+        logger.setLevel(old)
+
+    _, err = capsys.readouterr()
+    assert code == 0
+    assert "review: Engine: Read calc.py\n" in err
