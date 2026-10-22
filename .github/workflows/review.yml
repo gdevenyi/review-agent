@@ -56,8 +56,8 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-24.04
-    # The engine has 20 minutes for one run, retry included; the rest is setup.
-    timeout-minutes: 30
+    # The engine has 45 minutes for one run, retry included; the rest is setup.
+    timeout-minutes: 60
     steps:
       - name: Check out the runner repo (config and Reviewer Instructions)
         uses: actions/checkout@v7

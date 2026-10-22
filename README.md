@@ -137,7 +137,7 @@ The reusable workflow:
   artifacts.
 - refuses the Actions `GITHUB_TOKEN`. The Review must show as you, not as
   `github-actions[bot]`.
-- stops after 30 minutes. The engine has 20 minutes for one run, retry
+- stops after 60 minutes. The engine has 45 minutes for one run, retry
   included.
 - shows only "The engine failed" when the engine fails. The detail can
   quote model output, so it goes only to the run log file.

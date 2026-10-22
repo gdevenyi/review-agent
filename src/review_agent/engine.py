@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.z.ai/api/anthropic"
 DEFAULT_MODEL = "glm-5.3-flash"
-DEFAULT_TIMEOUT = 20 * 60
+DEFAULT_TIMEOUT = 45 * 60
 DEFAULT_HEARTBEAT = 30  # seconds between "Engine running" log lines
 
 # Fixed paths inside the sandbox. The host layout does not leak in.

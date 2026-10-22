@@ -127,7 +127,7 @@ def test_pending_review_on_a_later_page_is_found(world):
 
 
 def test_engine_failure_posts_nothing(world):
-    world.engine.respond(EngineTimeout("The engine did not finish in 1200 seconds."))
+    world.engine.respond(EngineTimeout("The engine did not finish in 2700 seconds."))
 
     result = post(world, RunMode.PUBLISH)
 

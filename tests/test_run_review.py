@@ -11,6 +11,7 @@ from harness import (
 )
 
 from review_agent.engine import EngineTimeout
+from review_agent.run import ENGINE_BUDGET
 
 
 def test_dry_run_writes_review_files_and_posts_nothing(world):
@@ -140,7 +141,7 @@ def test_invalid_json_then_valid_json_gives_a_review(world):
 
 
 def test_engine_failure_writes_nothing_and_is_not_retried(world):
-    world.engine.respond(EngineTimeout("The engine did not finish in 1200 seconds."))
+    world.engine.respond(EngineTimeout("The engine did not finish in 2700 seconds."))
 
     result = world.run()
 
@@ -267,7 +268,7 @@ def test_missing_config_file_gives_a_clear_error(world):
     assert world.engine.calls == []
 
 
-# --- the 20-minute engine budget (story 12): per run, not per attempt -------
+# --- the 45-minute engine budget (story 12): per run, not per attempt -------
 
 
 def test_the_retry_gets_only_the_rest_of_the_engine_budget(world):
@@ -277,15 +278,18 @@ def test_the_retry_gets_only_the_rest_of_the_engine_budget(world):
     result = world.run()
 
     assert result.ok, result.error
-    assert [c.timeout for c in world.engine.calls] == [20 * 60, 15 * 60]
+    assert [c.timeout for c in world.engine.calls] == [
+        ENGINE_BUDGET,
+        ENGINE_BUDGET - 5 * 60,
+    ]
 
 
 def test_no_retry_when_too_little_of_the_engine_budget_is_left(world):
-    world.engine.respond("not JSON", took=19 * 60 + 30)
+    world.engine.respond("not JSON", took=ENGINE_BUDGET - 30)
     world.engine.respond(review_json())
 
     result = world.run()
 
     assert_failed_with_nothing_written(world, result)
     assert len(world.engine.calls) == 1
-    assert "invalid Review JSON" in result.error and "20 minutes" in result.error
+    assert "invalid Review JSON" in result.error and f"{ENGINE_BUDGET // 60} minutes" in result.error
