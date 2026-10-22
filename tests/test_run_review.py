@@ -292,4 +292,5 @@ def test_no_retry_when_too_little_of_the_engine_budget_is_left(world):
 
     assert_failed_with_nothing_written(world, result)
     assert len(world.engine.calls) == 1
-    assert "invalid Review JSON" in result.error and f"{ENGINE_BUDGET // 60} minutes" in result.error
+    assert "invalid Review JSON" in result.error
+    assert f"{ENGINE_BUDGET // 60} minutes" in result.error
