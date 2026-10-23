@@ -22,7 +22,9 @@ import sys
 from pathlib import Path
 
 from review_agent import actions
-from review_agent.run import Options, RunMode, run_review
+from review_agent.github import parse_pr_url
+from review_agent.publisher import Publisher
+from review_agent.run import Options, RunMode, RunResult, run_review
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -54,6 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="directory for the --dry-run files (default: the current directory)",
+    )
+    p.add_argument(
+        "--review-copy",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="after a successful run, also write the Review as markdown to "
+        "PATH (mode 600). The Action uses it to copy the Review to an issue",
     )
     p.add_argument(
         "--actions",
@@ -114,10 +124,23 @@ def main(argv: list[str] | None = None) -> int:
         if result.log_path:
             print(f"review: run log: {result.log_path}", file=sys.stderr)
         return 1
+    if args.review_copy is not None and result.review is not None:
+        write_review_copy(result, args.review_copy)
     print(result.status)
     for f in result.files:
         print(f"  {f}")
     return 0
+
+
+def write_review_copy(result: RunResult, path: Path) -> None:
+    """Write the filtered Review that the run posted as markdown, with the
+    run status first. Only the user can read the file. It never goes to the
+    job log."""
+    pr = parse_pr_url(result.pr_url)
+    text = f"{result.status}\n\n" + Publisher(pr).markdown(result.review)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 def _no_engine_detail(record: logging.LogRecord) -> bool:

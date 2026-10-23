@@ -155,10 +155,14 @@ You can also start a Review when you open an issue in the runner repo:
    `### Publish` and `- [X] Publish the Review at once (COMMENT)`.
 
 The workflow starts only for issues that the repo owner opens with the
-`review-request` label. When the run is done, it comments on the issue with
-the result and a link to the run, and it closes the issue if the Review is
-posted. If the Review fails, the issue stays open. The comment never has
-Review content.
+`review-request` label. After a successful run, it posts a copy of the Review
+on the issue: the summary, and each inline comment with its file and line.
+Then it comments with the result and a link to the run, and it closes the
+issue. If the Review fails, the issue stays open and gets no copy.
+
+- The copy is read-only. To change the Review, edit and submit it on the PR.
+- The copy holds Review content, so the workflow posts it only when the
+  runner repo is private. The job log never shows it.
 
 The reusable workflow:
 

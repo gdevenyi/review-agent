@@ -31,6 +31,15 @@ on:
         required: false
         type: string
         default: review-agent/config.toml
+      issue_number:
+        description: >-
+          Optional. An issue number in the runner repo. After a successful
+          run, the workflow posts a copy of the Review on that issue. Only
+          when the runner repo is private. The caller job must allow
+          `issues: write`.
+        required: false
+        type: string
+        default: ""
       claude_version:
         description: "The Claude Code version to install"
         required: false
@@ -50,8 +59,9 @@ on:
           of the review step.
         required: false
 
-permissions:
-  contents: read
+# No `permissions:` here: a reusable workflow can only keep or reduce the
+# caller's permissions. The caller job sets them: `contents: read`, and
+# `issues: write` when it passes `issue_number`.
 
 jobs:
   review:
@@ -104,6 +114,7 @@ jobs:
       - name: Review
         env:
           PR_URL: ${{ inputs.pr_url }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
           PUBLISH: ${{ inputs.publish }}
           REVIEW_AGENT_CONFIG: ${{ github.workspace }}/${{ inputs.config }}
           REVIEW_AGENT_GITHUB_TOKEN: ${{ secrets.reviewer_token }}
@@ -135,7 +146,41 @@ jobs:
           unset EXTRA_TOKENS line name value
 
           args=("$PR_URL" --actions)
+          if [ -n "$ISSUE_NUMBER" ]; then
+            args+=(--review-copy "$RUNNER_TEMP/review-copy.md")
+          fi
           if [ "$PUBLISH" = "true" ]; then
             args+=(--publish)
           fi
           review "${args[@]}"
+
+      - name: Copy the Review to the issue
+        if: always() && inputs.issue_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          # The copy holds Review content: never print it.
+          copy="$RUNNER_TEMP/review-copy.md"
+          if [ ! -s "$copy" ]; then
+            echo "No Review to copy."
+            exit 0
+          fi
+          if [ "$REPO_PRIVATE" != "true" ]; then
+            echo "::warning::The runner repo is not private, so the Review is not copied to the issue."
+          else
+            # An issue comment holds at most 65536 characters.
+            python3 - "$copy" <<'PY'
+          import sys
+          p = sys.argv[1]
+          t = open(p, encoding="utf-8").read()
+          if len(t) > 65000:
+              t = t[:65000] + "\n\n(Cut: the full Review is on the PR.)\n"
+              open(p, "w", encoding="utf-8").write(t)
+          PY
+            gh issue comment "$ISSUE_NUMBER" --body-file "$copy" >/dev/null
+            echo "Copied the Review to issue #$ISSUE_NUMBER."
+          fi
+          rm -f "$copy"

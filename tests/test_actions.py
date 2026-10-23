@@ -145,3 +145,40 @@ def test_actions_engine_progress_reaches_the_job_log_without_a_run_log(
     _, err = capsys.readouterr()
     assert code == 0
     assert "review: Engine: Read calc.py\n" in err
+
+
+def test_review_copy_writes_the_posted_review_as_a_private_file(
+    world, monkeypatch, tmp_path, capsys
+):
+    world.engine.respond(
+        review_json("COPY-SUMMARY", [finding("COPY-BODY", line=6, side="RIGHT")])
+    )
+    copy = tmp_path / "copy.md"
+
+    code, _, _, _ = actions(
+        world, monkeypatch, tmp_path, PR_URL, "--review-copy", str(copy)
+    )
+
+    out, err = capsys.readouterr()
+    assert code == 0
+    text = copy.read_text()
+    assert "COPY-SUMMARY" in text and "COPY-BODY" in text
+    assert "`calc.py` line 6 (RIGHT)" in text
+    assert "Draft Review" in text and PR_URL in text
+    assert copy.stat().st_mode & 0o777 == 0o600
+    # The copy goes only to the file, never to the job log.
+    assert "COPY-" not in out + err
+
+
+def test_review_copy_is_not_written_when_the_run_fails(
+    world, monkeypatch, tmp_path, capsys
+):
+    world.login = "someone-else"
+    copy = tmp_path / "copy.md"
+
+    code, _, _, _ = actions(
+        world, monkeypatch, tmp_path, PR_URL, "--review-copy", str(copy)
+    )
+
+    assert code == 1
+    assert not copy.exists()

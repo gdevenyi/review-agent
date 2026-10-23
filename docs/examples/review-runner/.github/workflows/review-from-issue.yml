@@ -4,11 +4,13 @@
 #
 # - Only issues that the repo owner opens start a Review.
 # - The PR URL must have the form https://github.com/<owner>/<repo>/pull/<n>.
-# - When the run is done, the workflow comments on the issue with the result.
-#   It closes the issue when the Review is posted.
+# - After a successful run, the issue gets a copy of the Review (the summary
+#   and the inline comments with their file and line). The runner repo must
+#   be private: in a public repo the copy is not posted.
+# - Then the workflow comments on the issue with the result and a link to the
+#   run. It closes the issue when the Review is posted.
 #
-# The comment has the status and a link to the run. It never has Review
-# content.
+# The copy is read-only: edit and submit the Review on the PR.
 name: review from issue
 
 on:
@@ -64,6 +66,11 @@ jobs:
 
   review:
     needs: parse
+    # issues: write lets the reusable workflow post a copy of the Review on
+    # this issue (only in a private runner repo).
+    permissions:
+      contents: read
+      issues: write
     # Use the same review-agent ref in `uses:` and in `ref:`.
     uses: gdevenyi/review-agent/.github/workflows/review.yml@master
     with:
@@ -71,6 +78,7 @@ jobs:
       publish: ${{ needs.parse.outputs.publish == 'true' }}
       ref: master
       config: review-agent/config.toml
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
     secrets:
       reviewer_token: ${{ secrets.GH_PR_AGENT }}
       engine_key: ${{ secrets.ZAI_API_KEY }}
