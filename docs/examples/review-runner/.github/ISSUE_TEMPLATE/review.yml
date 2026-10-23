@@ -1,0 +1,24 @@
+# Issue form for the runner repo: open an issue to start a Review.
+# The workflow .github/workflows/review-from-issue.yml reads it.
+name: Review a PR
+description: Leave a Draft Review (or a Published Review) on one Target PR.
+title: "Review: "
+labels: ["review-request"]
+body:
+  - type: input
+    id: pr_url
+    attributes:
+      label: PR URL
+      description: "The Target PR: https://github.com/<owner>/<repo>/pull/<number>"
+      placeholder: https://github.com/owner/repo/pull/123
+    validations:
+      required: true
+  - type: checkboxes
+    id: publish
+    attributes:
+      label: Publish
+      description: >-
+        Leave this off to get a Draft Review that only you can see. Turn it on
+        to post the Review at once as a COMMENT that everyone can see.
+      options:
+        - label: Publish the Review at once (COMMENT)

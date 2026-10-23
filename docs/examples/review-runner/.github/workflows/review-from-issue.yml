@@ -1,0 +1,113 @@
+# Example workflow for your PRIVATE runner repo: start a Review when you open
+# an issue with the "Review a PR" form (.github/ISSUE_TEMPLATE/review.yml).
+# Copy it to .github/workflows/review-from-issue.yml in that repo.
+#
+# - Only issues that the repo owner opens start a Review.
+# - The PR URL must have the form https://github.com/<owner>/<repo>/pull/<n>.
+# - When the run is done, the workflow comments on the issue with the result.
+#   It closes the issue when the Review is posted.
+#
+# The comment has the status and a link to the run. It never has Review
+# content.
+name: review from issue
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-issue-${{ github.event.issue.number }}
+
+jobs:
+  parse:
+    if: >-
+      github.event.issue.user.login == github.repository_owner &&
+      contains(github.event.issue.labels.*.name, 'review-request')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      pr_url: ${{ steps.form.outputs.pr_url }}
+      publish: ${{ steps.form.outputs.publish }}
+    steps:
+      - id: form
+        name: Read the PR URL from the issue form
+        env:
+          # The issue body is untrusted text: use it only through the
+          # environment, never inside the script.
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        shell: python3 {0}
+        run: |
+          import os, re, sys
+
+          body = os.environ.get("ISSUE_BODY", "").replace("\r\n", "\n")
+          sections = {}
+          for part in re.split(r"^### ", body, flags=re.M)[1:]:
+              head, _, text = part.partition("\n")
+              sections[head.strip()] = text.strip()
+
+          url = sections.get("PR URL", "").strip()
+          if not re.fullmatch(
+              r"https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+/pull/[0-9]+", url
+          ):
+              print("::error::The issue has no valid PR URL. Use the form "
+                    "https://github.com/<owner>/<repo>/pull/<number>.")
+              sys.exit(1)
+          publish = bool(re.search(r"^- \[[xX]\]", sections.get("Publish", ""), re.M))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"pr_url={url}\npublish={'true' if publish else 'false'}\n")
+          print(f"PR URL: {url}")
+          print(f"Publish: {publish}")
+
+  review:
+    needs: parse
+    # Use the same review-agent ref in `uses:` and in `ref:`.
+    uses: gdevenyi/review-agent/.github/workflows/review.yml@master
+    with:
+      pr_url: ${{ needs.parse.outputs.pr_url }}
+      publish: ${{ needs.parse.outputs.publish == 'true' }}
+      ref: master
+      config: review-agent/config.toml
+    secrets:
+      reviewer_token: ${{ secrets.GH_PR_AGENT }}
+      engine_key: ${{ secrets.ZAI_API_KEY }}
+      extra_tokens: ${{ secrets.EXTRA_TOKENS }}
+
+  report:
+    needs: [parse, review]
+    if: always() && needs.parse.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Comment on the issue with the result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          PARSE: ${{ needs.parse.result }}
+          REVIEW: ${{ needs.review.result }}
+          PR_URL: ${{ needs.parse.outputs.pr_url }}
+          PUBLISH: ${{ needs.parse.outputs.publish }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$PARSE" != "success" ]; then
+            msg="The issue has no valid PR URL, so no Review started. Use the form https://github.com/<owner>/<repo>/pull/<number> and open a new issue. Run: $RUN_URL"
+            gh issue comment "$ISSUE" --body "$msg"
+            exit 0
+          fi
+          if [ "$REVIEW" = "success" ]; then
+            if [ "$PUBLISH" = "true" ]; then
+              what="A Published Review (COMMENT) is posted on $PR_URL."
+            else
+              what="A Draft Review is waiting for you on $PR_URL. Open the PR, check and edit the Review, then submit it."
+            fi
+            gh issue comment "$ISSUE" --body "$what Run: $RUN_URL"
+            gh issue close "$ISSUE" --reason completed
+          else
+            gh issue comment "$ISSUE" --body "The Review of $PR_URL did not finish ($REVIEW). Nothing was posted. See the run log and job summary: $RUN_URL"
+          fi

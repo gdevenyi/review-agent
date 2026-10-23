@@ -124,6 +124,42 @@ start a Review from the GitHub UI (Actions tab, "Run workflow") or with
 
    Add `-f publish=true` to publish the Review at once as a COMMENT.
 
+### Start a Review from an issue
+
+You can also start a Review when you open an issue in the runner repo:
+
+1. Copy these two files to the same paths in the runner repo:
+   - [docs/examples/review-runner/.github/ISSUE_TEMPLATE/review.yml](docs/examples/review-runner/.github/ISSUE_TEMPLATE/review.yml):
+     the "Review a PR" issue form.
+   - [docs/examples/review-runner/.github/workflows/review-from-issue.yml](docs/examples/review-runner/.github/workflows/review-from-issue.yml):
+     the workflow that reads the form.
+
+2. Make the label that the form adds:
+
+   ```sh
+   gh label create review-request --repo <you>/review-runner
+   ```
+
+3. Open a new issue in the runner repo, select "Review a PR", paste the PR
+   URL and submit. From the terminal, give the same body that the form makes:
+
+   ```sh
+   gh issue create --repo <you>/review-runner --label review-request \
+     --title "Review: <owner>/<repo>#<number>" \
+     --body "### PR URL
+
+   https://github.com/<owner>/<repo>/pull/<number>"
+   ```
+
+   To publish at once, add these lines to the body:
+   `### Publish` and `- [X] Publish the Review at once (COMMENT)`.
+
+The workflow starts only for issues that the repo owner opens with the
+`review-request` label. When the run is done, it comments on the issue with
+the result and a link to the run, and it closes the issue if the Review is
+posted. If the Review fails, the issue stays open. The comment never has
+Review content.
+
 The reusable workflow:
 
 - installs bubblewrap, Claude Code at a pinned version (input
